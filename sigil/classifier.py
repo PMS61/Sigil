@@ -262,7 +262,6 @@ def _feat_touchpad(hand: HandResult, **_: Any) -> tuple[float, float, float]:
 
     tip = hand.landmarks[8]  # index tip for position
     count = count_extended_fingers(hand.landmarks)
-    logger.debug("touchpad_data: pos=(%.3f, %.3f), fingers=%d", tip[0], tip[1], count)
     return (float(tip[0]), float(tip[1]), float(count))
 
 
@@ -304,32 +303,10 @@ class GradualClassifier(BaseClassifier):
             if isinstance(value, tuple):
                 # For positions, we don't trigger on delta by default,
                 # but we emit the result if the hand is detected.
+                triggered = True
                 pos = (value[0], value[1]) if len(value) >= 2 else None
                 deltas = value if "deltas" in feat_name else None
                 scalar_val = value[2] if len(value) == 3 else 0.0
-
-                # Check finger count conditions for touchpad_data
-                min_fingers = mapping.condition.get("min_fingers")
-                max_fingers = mapping.condition.get("max_fingers")
-                if min_fingers is not None or max_fingers is not None:
-                    finger_count = int(scalar_val)
-                    logger.debug(
-                        "Finger count check for '%s': count=%d, min=%s, max=%s",
-                        mapping.name,
-                        finger_count,
-                        min_fingers,
-                        max_fingers,
-                    )
-                    if min_fingers is not None and finger_count < min_fingers:
-                        logger.debug("  -> Filtered: count %d < min %d", finger_count, min_fingers)
-                        triggered = False
-                    elif max_fingers is not None and finger_count > max_fingers:
-                        logger.debug("  -> Filtered: count %d > max %d", finger_count, max_fingers)
-                        triggered = False
-                    else:
-                        triggered = True
-                else:
-                    triggered = True
             else:
                 delta = value - prev_val  # type: ignore[operator]
                 min_delta = mapping.condition.get("min_delta", 0.05)

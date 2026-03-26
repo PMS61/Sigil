@@ -82,19 +82,17 @@ def finger_curl_angles(landmarks: np.ndarray) -> np.ndarray:
 
 
 def count_extended_fingers(landmarks: np.ndarray) -> int:
-    """Returns number of fingers extended (0-4, excludes thumb).
-
-    Only counts index, middle, ring, and pinky fingers.
-    Thumb detection is unreliable for touchpad gestures.
-    """
+    """Returns number of fingers extended (0-5)."""
     curls = finger_curl_angles(landmarks)
-    # Only count fingers 1-4 (index, middle, ring, pinky), skip thumb (index 0)
     # Threshold: curl < 0.5 is roughly extended
-    extended = curls[1:] < 0.5  # Skip thumb
+    # Note: Thumb detection (index 0) is inherently noisier with this method
+    extended = curls < 0.5
     return int(np.sum(extended))
 
 
-def hand_velocity(prev: np.ndarray | None, curr: np.ndarray, dt: float) -> float:
+def hand_velocity(
+    prev: np.ndarray | None, curr: np.ndarray, dt: float
+) -> float:
     """Palm velocity in normalised-coord units / second."""
     if prev is None or dt <= 0:
         return 0.0

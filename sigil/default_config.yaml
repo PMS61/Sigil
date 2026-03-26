@@ -83,8 +83,6 @@ gestures:
     active_modes: [touchpad]
     condition:
       feature: "touchpad_data"
-      min_fingers: 1
-      max_fingers: 1
     action: "hyprctl dispatch movecursor {x} {y}"
 
   - name: touchpad_scroll
@@ -94,9 +92,7 @@ gestures:
     active_modes: [touchpad]
     condition:
       feature: "touchpad_data"
-      min_fingers: 2
-      max_fingers: 2
-    action: "hyprctl dispatch sendshortcut , mouse_up, activewindow"
+    action: "if [ {count} -eq 2 ]; then hyprctl dispatch sendshortcut , mouse_up, activewindow; fi"
 
   - name: tap_left_click
     type: instant
@@ -105,24 +101,6 @@ gestures:
     condition:
       pose: "Thumb_Index_Pinch"
     action: "hyprctl dispatch exec ydotool click 0xC0"
-    cooldown_ms: 300
-
-  - name: tap_right_click
-    type: instant
-    hand: right
-    active_modes: [touchpad]
-    condition:
-      pose: "Closed_Fist"
-    action: "hyprctl dispatch exec ydotool click 0xC2"
-    cooldown_ms: 300
-
-  - name: tap_middle_click
-    type: instant
-    hand: right
-    active_modes: [touchpad]
-    condition:
-      pose: "Thumb_Up"
-    action: "hyprctl dispatch exec ydotool click 0xC1"
     cooldown_ms: 300
 
   - name: three_finger_swipe_next
