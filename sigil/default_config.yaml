@@ -1,0 +1,350 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Sigil default configuration (§5.5)
+# Copy to ~/.config/sigil/config.yaml and customise.
+# ─────────────────────────────────────────────────────────────────────────────
+
+log_level: info          # debug | info | error
+overlay: true            # Show landmark overlay
+daemon: true             # Run as background daemon
+
+# Overlay UI Settings ──────────────────────────────────────────────────────────
+overlay_settings:
+  position: "bottom-right"   # top-left | top-right | bottom-left | bottom-right
+  width: 320
+  height: 180
+  opacity: 1.0               # 0.0–1.0  window-level opacity
+  camera_preview: true        # render camera feed in overlay
+  margin: 16                  # px gap from screen edge
+
+# §5.1 Tracking Engine ────────────────────────────────────────────────────────
+tracking:
+  num_hands: 2
+  min_detection_confidence: 0.7
+  min_tracking_confidence: 0.6
+  model_asset_path: hand_landmarker.task   # downloaded on first run
+  camera_id: 0
+  frame_width: 1280
+  frame_height: 720
+  target_fps: 30
+  low_fps_fallback: 15
+
+# §5.5 Execution ──────────────────────────────────────────────────────────────
+execution:
+  confirm_frames: 3              # consecutive frames with same gesture needed to fire
+  blanking_ms: 1500              # global suppression (ms) after an instant action fires
+  confidence_threshold: 0.75     # minimum confidence per frame to count towards confirmation
+
+# §5.3 Recording Mode ─────────────────────────────────────────────────────────
+recording:
+  hotkey: "Super+Alt+G"
+  samples_per_class: 100
+  min_samples: 50
+  max_samples: 200
+  # output_dir defaults to ~/.local/share/sigil/recordings
+
+# §5.5 Gesture Mappings ───────────────────────────────────────────────────────
+# Each entry: name, type (instant|gradual|sequential), hand, condition, action.
+# Priority: first match fires.
+#
+# Modes:
+#   active_modes: [touchpad]  – only fires in touchpad (cursor) mode
+#   active_modes: [keybind]   – only fires in keybind (gesture) mode
+#   active_modes: [both]      – fires in any mode (default)
+#   mode_toggle: true          – switches between touchpad/keybind (immune to blanking)
+#
+# Start in "touchpad" mode. Use Victory ✌️ to toggle to "keybind" mode.
+# In keybind mode, static gestures fire cleanly without cursor interference.
+# MediaPipe recognises 6 built-in poses per hand: Closed_Fist, Open_Palm,
+# Thumb_Up, Thumb_Down, Pointing_Up, ILoveYou, plus custom Thumb_Index_Pinch.
+# Left/right hand doubles the available bindings.
+gestures:
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  MODE TOGGLE
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ILoveYou 🤟 (right hand) toggles between touchpad and keybind modes.
+  # Bypasses blanking so you can always switch back.
+  # Uses ILoveYou because it's a distinctive pose not easy to trigger by accident.
+  - name: mode_toggle
+    type: instant
+    hand: right
+    condition:
+      pose: "ILoveYou"
+    action: ""
+    mode_toggle: true
+    cooldown_ms: 800
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  TOUCHPAD MODE  (cursor + scroll + click)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: touchpad_pointer
+    type: gradual
+    hand: right
+    continuous: true
+    active_modes: [touchpad]
+    condition:
+      feature: "touchpad_data"
+      min_fingers: 1
+      max_fingers: 1
+    action: "hyprctl dispatch movecursor {x} {y}"
+
+  - name: touchpad_scroll
+    type: gradual
+    hand: right
+    continuous: true
+    active_modes: [touchpad]
+    condition:
+      feature: "touchpad_data"
+      min_fingers: 2
+      max_fingers: 2
+    action: "hyprctl dispatch sendshortcut , mouse_up, activewindow"
+
+  - name: tap_left_click
+    type: instant
+    hand: right
+    active_modes: [touchpad]
+    condition:
+      pose: "Thumb_Index_Pinch"
+    action: "hyprctl dispatch exec ydotool click 0xC0"
+    cooldown_ms: 300
+
+  - name: tap_right_click
+    type: instant
+    hand: right
+    active_modes: [touchpad]
+    condition:
+      pose: "Closed_Fist"
+    action: "hyprctl dispatch exec ydotool click 0xC2"
+    cooldown_ms: 300
+
+  - name: tap_middle_click
+    type: instant
+    hand: right
+    active_modes: [touchpad]
+    condition:
+      pose: "Thumb_Up"
+    action: "hyprctl dispatch exec ydotool click 0xC1"
+    cooldown_ms: 300
+
+  - name: three_finger_swipe_next
+    type: gradual
+    hand: right
+    active_modes: [touchpad]
+    condition:
+      feature: "touchpad_data"
+      min_delta: 0.1
+    action: "if [ {count} -eq 3 ]; then hyprctl dispatch workspace e+1; fi"
+    cooldown_ms: 500
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  KEYBIND MODE – RIGHT HAND
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── Window management ──────────────────────────────────────────────────────
+  - name: fist_close_window
+    type: instant
+    hand: right
+    active_modes: [keybind]
+    condition:
+      pose: "Closed_Fist"
+    action: "hyprctl dispatch killactive"
+    cooldown_ms: 500
+
+  - name: palm_fullscreen
+    type: instant
+    hand: right
+    active_modes: [keybind]
+    condition:
+      pose: "Open_Palm"
+    action: "hyprctl dispatch fullscreen 0"
+    cooldown_ms: 600
+
+  - name: point_focus_next
+    type: instant
+    hand: right
+    active_modes: [keybind]
+    condition:
+      pose: "Pointing_Up"
+    action: "hyprctl dispatch cyclenext"
+    cooldown_ms: 300
+
+  # ── Workspace switching ────────────────────────────────────────────────────
+  - name: thumb_up_ws_next
+    type: instant
+    hand: right
+    active_modes: [keybind]
+    condition:
+      pose: "Thumb_Up"
+    action: "hyprctl dispatch workspace e+1"
+    cooldown_ms: 400
+
+  - name: thumb_down_ws_prev
+    type: instant
+    hand: right
+    active_modes: [keybind]
+    condition:
+      pose: "Thumb_Down"
+    action: "hyprctl dispatch workspace e-1"
+    cooldown_ms: 400
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  KEYBIND MODE – LEFT HAND  (apps, media, session)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ── App launchers ──────────────────────────────────────────────────────────
+  - name: left_fist_terminal
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "Closed_Fist"
+    action: "hyprctl dispatch exec kitty"
+    cooldown_ms: 800
+
+  - name: left_palm_browser
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "Open_Palm"
+    action: "hyprctl dispatch exec firefox"
+    cooldown_ms: 800
+
+  # ── Media controls ─────────────────────────────────────────────────────────
+  - name: left_thumb_up_media_next
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "Thumb_Up"
+    action: "hyprctl dispatch exec playerctl next"
+    cooldown_ms: 400
+
+  - name: left_thumb_down_media_prev
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "Thumb_Down"
+    action: "hyprctl dispatch exec playerctl previous"
+    cooldown_ms: 400
+
+  - name: left_point_media_pause
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "Pointing_Up"
+    action: "hyprctl dispatch exec playerctl play-pause"
+    cooldown_ms: 400
+
+  # ── Session ────────────────────────────────────────────────────────────────
+  - name: left_iloveyou_lock
+    type: instant
+    hand: left
+    active_modes: [keybind]
+    condition:
+      pose: "ILoveYou"
+    action: "hyprctl dispatch exec loginctl lock-session"
+    cooldown_ms: 1000
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  KEYBIND MODE – BOTH HANDS  (window movement)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Pinch to resize: two-hand distance maps to resizeactive
+  - name: both_fist_kill_force
+    type: instant
+    hand: both
+    active_modes: [keybind]
+    condition:
+      pose: "Closed_Fist"
+    action: "hyprctl dispatch exec hyprctl kill"
+    cooldown_ms: 1000
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  GRADUAL GESTURES  (work in any mode)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: pinch_zoom_in
+    type: gradual
+    hand: both
+    active_modes: [both]
+    condition:
+      feature: "two_hand_distance"
+      min_delta: 0.05
+      direction: "increase"
+    action: "hyprctl dispatch sendshortcut CTRL, plus, activewindow"
+    cooldown_ms: 150
+
+  - name: pinch_zoom_out
+    type: gradual
+    hand: both
+    active_modes: [both]
+    condition:
+      feature: "two_hand_distance"
+      min_delta: 0.05
+      direction: "decrease"
+    action: "hyprctl dispatch sendshortcut CTRL, minus, activewindow"
+    cooldown_ms: 150
+
+  # Palm velocity → volume control (hand speed up/down)
+  - name: hand_speed_volume
+    type: gradual
+    hand: right
+    active_modes: [both]
+    condition:
+      feature: "palm_velocity"
+      min_delta: 0.15
+      direction: "increase"
+    action: "hyprctl dispatch exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%+ -l 1.5"
+    cooldown_ms: 100
+
+  - name: hand_speed_volume_down
+    type: gradual
+    hand: right
+    active_modes: [both]
+    condition:
+      feature: "palm_velocity"
+      min_delta: 0.15
+      direction: "decrease"
+    action: "hyprctl dispatch exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%-"
+    cooldown_ms: 100
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  SEQUENTIAL GESTURES
+  # ═══════════════════════════════════════════════════════════════════════════
+  - name: swipe_right_launch_terminal
+    type: sequential
+    hand: left
+    active_modes: [both]
+    condition:
+      sequence:
+        - swipe_right
+        - open_palm
+      window_frames: 20
+    action: "hyprctl dispatch exec kitty"
+    cooldown_ms: 800
+
+  # Screenshot: swipe left then fist (left hand)
+  - name: swipe_left_screenshot
+    type: sequential
+    hand: left
+    active_modes: [both]
+    condition:
+      sequence:
+        - swipe_left
+        - closed_fist
+      window_frames: 20
+    action: "hyprctl dispatch exec 'grim - | wl-copy'"
+    cooldown_ms: 1000
+
+  # File manager: fist then point (left hand)
+  - name: fist_then_point_file_manager
+    type: sequential
+    hand: left
+    active_modes: [keybind]
+    condition:
+      sequence:
+        - closed_fist
+        - pointing_up
+      window_frames: 25
+    action: "hyprctl dispatch exec dolphin"
+    cooldown_ms: 800

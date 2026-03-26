@@ -1,0 +1,182 @@
+/* ── Sigil GTK4 Overlay Stylesheet ─────────────────────────────────
+ *
+ * Catppuccin Mocha-inspired theme for Hyprland integration.
+ * Applied to the Wayland layer-shell overlay window.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* ── Base window ────────────────────────────────────────────────────── */
+.sigil-window {
+    background-color: transparent;
+}
+
+/* ── Main overlay panel ─────────────────────────────────────────────── */
+.sigil-panel {
+    background-color: rgba(30, 30, 46, 0.88);
+    border-radius: 16px;
+    border: 1px solid rgba(137, 180, 250, 0.20);
+    padding: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.sigil-panel:backdrop {
+    background-color: rgba(30, 30, 46, 0.75);
+    border: 1px solid rgba(137, 180, 250, 0.10);
+}
+
+/* ── Camera preview area ────────────────────────────────────────────── */
+.sigil-camera {
+    border-radius: 12px;
+    background-color: rgba(17, 17, 27, 0.95);
+    min-height: 180px;
+}
+
+.sigil-camera-recording {
+    border-radius: 12px;
+    background-color: rgba(17, 17, 27, 0.95);
+    border: 2px solid rgba(243, 139, 168, 0.7);
+    min-height: 180px;
+}
+
+/* ── Status section ─────────────────────────────────────────────────── */
+.sigil-status {
+    padding: 4px 0;
+}
+
+/* ── Labels ─────────────────────────────────────────────────────────── */
+.sigil-fps {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: rgba(166, 227, 161, 0.9);
+    font-weight: bold;
+}
+
+.sigil-hands {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 11px;
+    color: rgba(166, 173, 200, 0.8);
+}
+
+.sigil-gesture {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 13px;
+    font-weight: bold;
+    color: rgba(137, 180, 250, 1.0);
+}
+
+.sigil-gesture-none {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 12px;
+    color: rgba(108, 112, 134, 0.6);
+    font-style: italic;
+}
+
+.sigil-action {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 10px;
+    color: rgba(203, 166, 247, 0.8);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background-color: rgba(203, 166, 247, 0.08);
+}
+
+/* ── Recording indicator ────────────────────────────────────────────── */
+.sigil-recording-label {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    color: rgba(243, 139, 168, 1.0);
+}
+
+.sigil-recording-count {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: rgba(205, 214, 244, 0.9);
+}
+
+.sigil-progress-trough {
+    background-color: rgba(49, 50, 68, 0.8);
+    border-radius: 4px;
+    min-height: 6px;
+}
+
+.sigil-progress-bar {
+    background-color: rgba(243, 139, 168, 0.85);
+    border-radius: 4px;
+    min-height: 6px;
+}
+
+/* ── Toast messages ─────────────────────────────────────────────────── */
+.sigil-toast {
+    background-color: rgba(49, 50, 68, 0.90);
+    border-radius: 8px;
+    padding: 6px 12px;
+    border: 1px solid rgba(137, 180, 250, 0.15);
+}
+
+.sigil-toast-text {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+    color: rgba(166, 227, 161, 0.95);
+}
+
+/* ── Dot indicators ─────────────────────────────────────────────────── */
+.sigil-dot-idle {
+    color: rgba(108, 112, 134, 0.5);
+}
+
+.sigil-dot-active {
+    color: rgba(166, 227, 161, 1.0);
+}
+
+.sigil-dot-recording {
+    color: rgba(243, 139, 168, 1.0);
+}
+
+/* ── Mode badge ─────────────────────────────────────────────────────── */
+.sigil-mode-badge {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: rgba(17, 17, 27, 1.0);
+    background-color: rgba(137, 180, 250, 0.85);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+.sigil-mode-badge-touchpad {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: rgba(17, 17, 27, 1.0);
+    background-color: rgba(137, 180, 250, 0.85);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+.sigil-mode-badge-keybind {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: rgba(17, 17, 27, 1.0);
+    background-color: rgba(166, 227, 161, 0.85);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+.sigil-mode-badge-recording {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 9px;
+    font-weight: bold;
+    color: rgba(17, 17, 27, 1.0);
+    background-color: rgba(243, 139, 168, 0.90);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+/* ── Separator ──────────────────────────────────────────────────────── */
+.sigil-separator {
+    background-color: rgba(69, 71, 90, 0.4);
+    min-height: 1px;
+    margin: 4px 0;
+}
