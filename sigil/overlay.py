@@ -133,6 +133,7 @@ class Overlay:
         *,
         force_backend: str | None = None,
         overlay_cfg: OverlayConfig | None = None,
+        execution_cfg: ExecutionConfig | None = None,
     ) -> None:
         self._enabled = enabled
 
@@ -140,9 +141,10 @@ class Overlay:
         self._backend_name = force_backend or get_backend()
 
         # Import defaults for overlay settings
-        from sigil.config import OverlayConfig
+        from sigil.config import ExecutionConfig, OverlayConfig
 
         ocfg = overlay_cfg or OverlayConfig()
+        ecfg = execution_cfg or ExecutionConfig()
 
         self._wayland: Any = None
         self._opencv: _OpenCVOverlay | None = None

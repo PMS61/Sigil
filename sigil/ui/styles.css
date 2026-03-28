@@ -56,6 +56,13 @@
     color: rgba(166, 173, 200, 0.8);
 }
 
+.sigil-fingers {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: rgba(249, 138, 189, 0.9);
+    font-weight: bold;
+}
+
 .sigil-gesture {
     font-family: "Inter", "Cantarell", sans-serif;
     font-size: 13px;

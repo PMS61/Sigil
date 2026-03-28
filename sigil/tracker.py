@@ -143,6 +143,16 @@ class Tracker:
             logger.warning("Camera read failed")
             return None
 
+        # ── Digital Zoom (Crop & Resize) ─────────────────────────────────────
+        if self._cfg.zoom > 1.0:
+            h, w = frame.shape[:2]
+            new_w = int(w / self._cfg.zoom)
+            new_h = int(h / self._cfg.zoom)
+            x = (w - new_w) // 2
+            y = (h - new_h) // 2
+            frame = frame[y : y + new_h, x : x + new_w]
+            frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_LINEAR)
+
         now = time.monotonic()
         dt = now - self._last_time
         self._last_time = now

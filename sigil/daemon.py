@@ -51,11 +51,12 @@ class Daemon:
         self._tracker = Tracker(self._cfg.tracking)
         self._classifier = GestureClassifier(self._cfg.gestures, self._cfg.execution)
         self._mapper = ActionMapper(self._cfg)
-        self._executor = Executor()
+        self._executor = Executor(self._cfg.execution)
         self._overlay = Overlay(
             enabled=self._cfg.overlay,
             force_backend=force_backend,
             overlay_cfg=self._cfg.overlay_settings,
+            execution_cfg=self._cfg.execution,
         )
         self._recorder = Recorder(self._cfg.recording)
 
@@ -346,6 +347,7 @@ class Daemon:
             self._actions_fired,
         )
         self._classifier.close()
+        self._executor.close()
         self._overlay.close()
         self._tracker.close()
 

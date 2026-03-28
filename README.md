@@ -12,7 +12,7 @@ Sigil uses **MediaPipe Hand Landmarker** to track dual-hand landmarks in real ti
 |---|---|
 | **Dual-hand tracking** | 21 3-D landmarks per hand @ 30–60 fps |
 | **Instant gestures** | Single-frame poses (pinch, open palm, thumbs up/down …) |
-| **Gradual gestures** | Continuous features — pinch zoom, finger curl, palm velocity |
+| **Gradual gestures** | Continuous features — pinch zoom, finger curl |
 | **Sequential gestures** | Multi-frame state machines (swipe → action) |
 | **Recording mode** | Collect custom samples interactively, per-class |
 | **One-click training** | MediaPipe Model Maker (instant) + scikit-learn (dynamic) |

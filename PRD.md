@@ -53,7 +53,7 @@ Use cases:
 
 5.2 Gesture Classification  
 - Instant: MediaPipe Gesture Recognizer (.task or custom .tflite via Model Maker).  
-- Gradual: Derived features (e.g. normalized thumb-index distance, palm velocity, finger curl angles).  
+- Gradual: Derived features (e.g. normalized thumb-index distance, finger curl angles).  
 - Sequential: Time-series buffer (8–30 frames) → DTW, state machine, or small LSTM on flattened diffs.  
 - Hybrid: Instant uses recognizer; dynamic uses landmark rules/model.  
 

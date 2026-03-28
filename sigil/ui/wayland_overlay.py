@@ -150,6 +150,7 @@ class WaylandOverlay:
         self._camera_area: Gtk.DrawingArea | None = None
         self._lbl_fps: Gtk.Label | None = None
         self._lbl_hands: Gtk.Label | None = None
+        self._lbl_fingers: Gtk.Label | None = None
         self._lbl_gesture: Gtk.Label | None = None
         self._lbl_action: Gtk.Label | None = None
         self._recording_box: Gtk.Box | None = None
@@ -312,6 +313,12 @@ class WaylandOverlay:
         self._lbl_fps.set_hexpand(True)
         self._lbl_fps.set_halign(Gtk.Align.END)
         status_row.append(self._lbl_fps)
+
+        # Finger count label
+        self._lbl_fingers = Gtk.Label(label="0 fingers")
+        self._lbl_fingers.add_css_class("sigil-fingers")
+        self._lbl_fingers.set_halign(Gtk.Align.END)
+        status_row.append(self._lbl_fingers)
 
         # Hands label
         self._lbl_hands = Gtk.Label(label="No hands")
@@ -495,6 +502,15 @@ class WaylandOverlay:
             else:
                 parts = [f"{h.handedness} ({h.score:.0%})" for h in frame_result.hands]
                 self._lbl_hands.set_text("  ".join(parts))
+
+        # Finger count label
+        if self._lbl_fingers and frame_result and frame_result.right:
+            from sigil.utils import count_extended_fingers
+
+            count = count_extended_fingers(frame_result.right.landmarks, frame_result.right.handedness)
+            self._lbl_fingers.set_text(f"{count} fingers")
+        elif self._lbl_fingers:
+            self._lbl_fingers.set_text("0 fingers")
 
         # Gesture label
         if self._lbl_gesture:

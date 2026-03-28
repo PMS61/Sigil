@@ -40,6 +40,7 @@ class TrackingConfig:
     frame_height: int = 720
     target_fps: int = 30
     low_fps_fallback: int = 15  # §6 graceful degradation
+    zoom: float = 1.0  # digital zoom level (1.0 = no zoom, >1.0 = cropped)
 
 
 @dataclass
@@ -76,7 +77,7 @@ class GestureMapping:
 
 @dataclass
 class ExecutionConfig:
-    """Controls how instant gestures are confirmed and blanked (§5.5)."""
+    """Controls how instant gestures are confirmed and cursor movement (§5.5)."""
 
     confirm_frames: int = 3  # consecutive frames required to confirm an instant gesture
     blanking_ms: int = 1500  # global suppression after an instant action fires
@@ -224,6 +225,7 @@ def save_config(cfg: SigilConfig, path: Path | None = None) -> None:
             "frame_height": cfg.tracking.frame_height,
             "target_fps": cfg.tracking.target_fps,
             "low_fps_fallback": cfg.tracking.low_fps_fallback,
+            "zoom": cfg.tracking.zoom,
         },
         "recording": {
             "hotkey": cfg.recording.hotkey,

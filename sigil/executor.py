@@ -16,6 +16,9 @@ import shutil
 import json
 import socket
 import subprocess
+import threading
+import queue
+import time
 from pathlib import Path
 from typing import Any
 
@@ -83,18 +86,15 @@ class Executor:
     """Executes hyprctl dispatch commands (§5.5).
 
     Prefers UNIX socket for <5 ms latency; falls back to CLI subprocess.
+    Uses a background worker thread to ensure non-blocking execution
+    from the tracking loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, execution: ExecutionConfig | None = None) -> None:
         self._socket_path = _find_hyprctl_socket()
         self._use_socket = self._socket_path is not None
         self._use_cli = _has_hyprctl()
         self._screen_res: tuple[int, int] = (1920, 1080)  # default fallback
-        
-        # Cursor smoothing state
-        self._last_norm_pos: tuple[float, float] | None = None
-        self._smoothing_alpha = 0.3  # lower = smoother but more lag
-        self._sensitivity = 2.0      # higher = less hand movement needed
         
         self._refresh_screen_res()
 
@@ -106,6 +106,60 @@ class Executor:
             logger.warning(
                 "Executor: hyprctl not found – actions will be logged but not executed"
             )
+
+        # Background worker state
+        self._action_queue: queue.Queue[str] = queue.Queue()
+        self._continuous_buffer: dict[str, str] = {}
+        self._buffer_lock = threading.Lock()
+        self._running = True
+        self._worker_thread = threading.Thread(
+            target=self._execution_worker, name="SigilExecutor", daemon=True
+        )
+        self._worker_thread.start()
+
+    def _execution_worker(self) -> None:
+        """Background thread that consumes the action queue."""
+        while self._running:
+            # 1. Process discrete actions (priority)
+            try:
+                while not self._action_queue.empty():
+                    action = self._action_queue.get_nowait()
+                    self._dispatch_immediate(action)
+                    self._action_queue.task_done()
+            except queue.Empty:
+                pass
+
+            # 2. Process latest continuous actions
+            with self._buffer_lock:
+                to_process = list(self._continuous_buffer.items())
+                self._continuous_buffer.clear()
+
+            for _name, action in to_process:
+                self._dispatch_immediate(action)
+
+            # Throttle the loop slightly to prevent CPU spinning
+            time.sleep(0.002)
+
+    def _dispatch_immediate(self, action: str) -> bool:
+        """The actual low-level execution call (blocking in this thread)."""
+        if self._use_socket and self._socket_path:
+            try:
+                return self._execute_socket_sync(action)
+            except OSError:
+                self._use_socket = False
+                self._socket_path = None
+
+        if self._use_cli:
+            return self._execute_cli_sync(action)
+        
+        return False
+
+    def close(self) -> None:
+        """Stop the background worker thread."""
+        self._running = False
+        if self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=1.0)
+        logger.debug("Executor worker thread stopped")
 
     def _refresh_screen_res(self) -> None:
         """Fetch primary monitor resolution from hyprctl."""
@@ -134,40 +188,6 @@ class Executor:
         # Base value interpolation
         action = action.replace("{val}", f"{result.value:.4f}")
         
-        # Position interpolation (scaled to screen)
-        if result.position:
-            norm_x, norm_y = result.position
-            
-            # Apply sensitivity (map center of camera to full screen)
-            norm_x = (norm_x - 0.5) * self._sensitivity + 0.5
-            norm_y = (norm_y - 0.5) * self._sensitivity + 0.5
-            
-            # Clamp to 0..1 range
-            norm_x = max(0.0, min(1.0, norm_x))
-            norm_y = max(0.0, min(1.0, norm_y))
-
-            # Apply exponential smoothing
-            if self._last_norm_pos is None:
-                self._last_norm_pos = (norm_x, norm_y)
-            else:
-                lx, ly = self._last_norm_pos
-                norm_x = lx + self._smoothing_alpha * (norm_x - lx)
-                norm_y = ly + self._smoothing_alpha * (norm_y - ly)
-                self._last_norm_pos = (norm_x, norm_y)
-
-            # MediaPipe X is 0 (left) to 1 (right). 
-            # Hyprland movecursor uses screen coordinates.
-            screen_x = int(norm_x * self._screen_res[0])
-            screen_y = int(norm_y * self._screen_res[1])
-            
-            action = action.replace("{x}", str(screen_x))
-            action = action.replace("{y}", str(screen_y))
-            action = action.replace("{nx}", f"{norm_x:.4f}")
-            action = action.replace("{ny}", f"{norm_y:.4f}")
-        else:
-            # Reset smoothing if no position detected this frame
-            self._last_norm_pos = None
-            
         # Delta interpolation
         if result.deltas:
             dx, dy = result.deltas
@@ -260,31 +280,26 @@ class Executor:
         logger.debug("CLI output: %s", stdout.decode().strip())
         return True
 
-    # ── Synchronous API (for GLib main loop) ─────────────────────────────────
     def execute_sync(self, action: str, result: ClassificationResult | None = None) -> bool:
-        """Execute a hyprctl action string synchronously.
+        """Hand off an action to the background worker thread.
 
-        Used by the GTK4/GLib path where async is not available.
+        Interpolates placeholders immediately to capture frame state,
+        then queues for execution. Returns True if successfully queued.
         """
         if not action:
             return False
 
-        action = self._interpolate_action(action, result)
-        logger.info("Executing (sync): %s", action)
+        action_str = self._interpolate_action(action, result)
+        is_continuous = result.continuous if result else False
+        gesture_name = result.gesture_name if result else "unknown"
 
-        if self._use_socket and self._socket_path:
-            try:
-                return self._execute_socket_sync(action)
-            except OSError as exc:
-                logger.warning("Socket failed (%s) – disabling, using CLI", exc)
-                self._use_socket = False
-                self._socket_path = None
+        if is_continuous:
+            with self._buffer_lock:
+                self._continuous_buffer[gesture_name] = action_str
+        else:
+            self._action_queue.put(action_str)
 
-        if self._use_cli:
-            return self._execute_cli_sync(action)
-
-        logger.warning("No executor available – skipping: %s", action)
-        return False
+        return True
 
     def _execute_socket_sync(self, action: str) -> bool:
         """Send command via synchronous UNIX socket."""

@@ -9,7 +9,7 @@ Sigil is a real-time hand gesture recognition system designed for the Hyprland W
     - `Tracker`: Captures webcam frames and extracts 21 3D landmarks per hand using MediaPipe Hand Landmarker.
     - `Classifier`: A hybrid engine supporting three gesture types:
         - **Instant:** Single-frame poses (e.g., Open Palm, Closed Fist) via MediaPipe Gesture Recognizer.
-        - **Gradual:** Continuous features (e.g., pinch distance, palm velocity) triggering actions based on thresholds.
+        - **Gradual:** Continuous features (e.g., pinch distance, finger curl) triggering actions based on thresholds.
         - **Sequential:** Multi-frame state machines (e.g., swipe followed by a circle).
     - `ActionMapper`: Maps classified gestures to specific `hyprctl` dispatcher commands via YAML configuration.
     - `Executor`: Dispatches commands to Hyprland using a UNIX socket (preferred) or the CLI for low-latency execution.

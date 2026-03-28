@@ -2,7 +2,7 @@
 
 Three classifier types:
   - Instant:     Single-frame pose via MediaPipe Gesture Recognizer or custom .tflite.
-  - Gradual:     Continuous derived features (pinch distance, velocity, curl).
+  - Gradual:     Continuous derived features (pinch distance, curl).
   - Sequential:  Multi-frame time-series via DTW / state-machine on landmark diffs.
 """
 
@@ -19,10 +19,10 @@ import numpy as np
 from sigil.config import ExecutionConfig, GestureMapping
 from sigil.tracker import FrameResult, HandResult
 from sigil.utils import (
+    count_extended_fingers,
     ensure_model,
     euclidean,
     finger_curl_angles,
-    hand_velocity,
     monotonic_ms,
     palm_center,
     thumb_index_distance,
@@ -61,6 +61,7 @@ class ClassificationResult:
     raw_label: str = ""  # underlying model label
     timestamp_ms: int = 0
     current_mode: str = "touchpad"  # active mode when this result was produced
+    continuous: bool = False  # if True, this gesture triggers every frame
 
 
 # ── Abstract base ────────────────────────────────────────────────────────────
@@ -86,6 +87,7 @@ class InstantClassifier(BaseClassifier):
     def __init__(
         self,
         mappings: list[GestureMapping],
+        execution: ExecutionConfig | None = None,
         custom_model: str | None = None,
     ) -> None:
         self._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
@@ -137,12 +139,20 @@ class InstantClassifier(BaseClassifier):
             # Match against configured mappings
             for mapping in self._mappings:
                 pose = mapping.condition.get("pose", "")
-                if pose and pose == label and self._hand_matches(mapping.hand, handedness):
-                    hand = frame_result.left if handedness == "Left" else frame_result.right
-                    pos = None
-                    if hand is not None:
-                        tip = hand.landmarks[8]
-                        pos = (float(tip[0]), float(tip[1]))
+                finger_count = mapping.condition.get("finger_count")
+                hand = frame_result.left if handedness == "Left" else frame_result.right
+                
+                if hand is None:
+                    continue
+
+                pose_match = not pose or pose == label
+                finger_match = True
+                if finger_count is not None:
+                    actual_count = count_extended_fingers(hand.landmarks, hand.handedness)
+                    finger_match = actual_count == finger_count
+                
+                if pose_match and finger_match and self._hand_matches(mapping.hand, handedness):
+                    pos = (float(hand.landmarks[8][0]), float(hand.landmarks[8][1]))
 
                     logger.info(
                         "Instant gesture matched: %s (pose=%s, hand=%s, conf=%.2f)",
@@ -161,6 +171,7 @@ class InstantClassifier(BaseClassifier):
                             hand=handedness,
                             raw_label=label,
                             timestamp_ms=frame_result.timestamp_ms,
+                            continuous=mapping.continuous,
                         )
                     )
                     break  # first match priority
@@ -203,16 +214,6 @@ def _feat_curl(hand: HandResult, **_: Any) -> float:
     return float(finger_curl_angles(hand.landmarks).mean())
 
 
-@_register_feature("palm_velocity")
-def _feat_velocity(
-    hand: HandResult,
-    prev: np.ndarray | None = None,
-    dt: float = 0.033,
-    **_: Any,
-) -> float:
-    return hand_velocity(prev, hand.landmarks, dt)
-
-
 @_register_feature("two_hand_distance")
 def _feat_two_hand_dist(
     _hand: HandResult,
@@ -235,9 +236,7 @@ def _feat_pointer_pos(hand: HandResult, **_: Any) -> tuple[float, float]:
 @_register_feature("finger_count")
 def _feat_finger_count(hand: HandResult, **_: Any) -> float:
     """Returns number of extended fingers."""
-    from sigil.utils import count_extended_fingers
-
-    return float(count_extended_fingers(hand.landmarks))
+    return float(count_extended_fingers(hand.landmarks, hand.handedness))
 
 
 @_register_feature("finger_deltas")
@@ -257,22 +256,23 @@ def _feat_finger_deltas(
 
 @_register_feature("touchpad_data")
 def _feat_touchpad(hand: HandResult, **_: Any) -> tuple[float, float, float]:
-    """Returns (x, y, finger_count)."""
-    from sigil.utils import count_extended_fingers
-
-    tip = hand.landmarks[8]  # index tip for position
-    count = count_extended_fingers(hand.landmarks)
+    """Returns (x, y, finger_count). Uses index tip for position."""
+    tip = hand.landmarks[8]  # index tip (landmark 8)
+    count = count_extended_fingers(hand.landmarks, hand.handedness)
     return (float(tip[0]), float(tip[1]), float(count))
 
 
 class GradualClassifier(BaseClassifier):
     """Derives continuous features from landmarks and triggers on threshold changes."""
 
-    def __init__(self, mappings: list[GestureMapping]) -> None:
+    def __init__(
+        self, mappings: list[GestureMapping], execution: ExecutionConfig | None = None
+    ) -> None:
         self._mappings = [m for m in mappings if m.type == "gradual" and m.enabled]
         self._prev_values: dict[str, float | tuple[float, float, float] | tuple[float, float]] = {}
         self._prev_landmarks: dict[str, np.ndarray] = {}  # per hand
         self._prev_time: float = 0.0
+        self._finger_count_history: dict[str, list[int]] = {}
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         results: list[ClassificationResult] = []
@@ -294,6 +294,27 @@ class GradualClassifier(BaseClassifier):
             if hand is None:
                 continue
 
+            # Check finger_count condition if specified (Per-hand check)
+            finger_count = mapping.condition.get("finger_count")
+            if finger_count is not None:
+                actual_count = count_extended_fingers(hand.landmarks, hand.handedness)
+                # Use history to require consistent finger count for stability
+                count_history = self._finger_count_history.get(mapping.name, [])
+                count_history.append(actual_count)
+                if len(count_history) > 5:
+                    count_history = count_history[-5:]
+                self._finger_count_history[mapping.name] = count_history
+
+                # Check if majority of recent frames match
+                matches = sum(1 for c in count_history if c == finger_count)
+                if matches < 3:  # require at least 3 of last 5 frames to match
+                    continue
+                
+                # SOLIDITY FIX: If this is a continuous gesture stop immediately
+                if mapping.continuous and actual_count != finger_count:
+                    self._finger_count_history[mapping.name] = []
+                    continue
+
             prev_lm = self._prev_landmarks.get(mapping.name)
             value = extractor(hand, prev=prev_lm, dt=dt, left=left, right=right)
 
@@ -301,8 +322,6 @@ class GradualClassifier(BaseClassifier):
 
             # Special case for coordinate features (tuples)
             if isinstance(value, tuple):
-                # For positions, we don't trigger on delta by default,
-                # but we emit the result if the hand is detected.
                 triggered = True
                 pos = (value[0], value[1]) if len(value) >= 2 else None
                 deltas = value if "deltas" in feat_name else None
@@ -335,6 +354,7 @@ class GradualClassifier(BaseClassifier):
                         hand=mapping.hand,
                         raw_label=feat_name,
                         timestamp_ms=frame_result.timestamp_ms,
+                        continuous=mapping.continuous,
                     )
                 )
 
@@ -434,6 +454,7 @@ class SequentialClassifier(BaseClassifier):
                         hand=mapping.hand,
                         raw_label="→".join(seq),
                         timestamp_ms=frame_result.timestamp_ms,
+                        continuous=mapping.continuous,
                     )
                 )
                 # Reset
@@ -475,8 +496,8 @@ class GestureClassifier:
         execution: ExecutionConfig | None = None,
         custom_instant_model: str | None = None,
     ) -> None:
-        self.instant = InstantClassifier(mappings, custom_instant_model)
-        self.gradual = GradualClassifier(mappings)
+        self.instant = InstantClassifier(mappings, execution, custom_instant_model)
+        self.gradual = GradualClassifier(mappings, execution)
         self.sequential = SequentialClassifier(mappings)
         self._last_fire: dict[str, int] = {}  # per-gesture cooldown tracking
 
