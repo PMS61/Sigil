@@ -60,7 +60,6 @@ class ClassificationResult:
     hand: str = ""  # "Left" | "Right" | "Both"
     raw_label: str = ""  # underlying model label
     timestamp_ms: int = 0
-    current_mode: str = "touchpad"  # active mode when this result was produced
     continuous: bool = False  # if True, this gesture triggers every frame
 
 
@@ -175,6 +174,10 @@ class InstantClassifier(BaseClassifier):
                         )
                     )
                     break  # first match priority
+                else:
+                    if pose_match and not finger_match:
+                        logger.debug("Gesture '%s' pose match but finger count mismatch (expected %d, got %d)", 
+                                     mapping.name, finger_count, actual_count)
 
         return results
 
@@ -252,14 +255,6 @@ def _feat_finger_deltas(
     dx = curr_palm[0] - prev_palm[0]
     dy = curr_palm[1] - prev_palm[1]
     return (float(dx), float(dy))
-
-
-@_register_feature("touchpad_data")
-def _feat_touchpad(hand: HandResult, **_: Any) -> tuple[float, float, float]:
-    """Returns (x, y, finger_count). Uses index tip for position."""
-    tip = hand.landmarks[8]  # index tip (landmark 8)
-    count = count_extended_fingers(hand.landmarks, hand.handedness)
-    return (float(tip[0]), float(tip[1]), float(count))
 
 
 class GradualClassifier(BaseClassifier):
@@ -415,8 +410,23 @@ class SequentialClassifier(BaseClassifier):
             self._buffer.append(label)
 
     def feed_landmarks(self, landmarks: np.ndarray) -> None:
-        """Feed raw landmarks for DTW-based matching (future use)."""
+        """Analyze landmark movement to detect swipes and feed the buffer."""
         self._landmark_buffer.append(landmarks.copy())
+        
+        if len(self._landmark_buffer) < 5:
+            return
+
+        # Simple horizontal swipe detection
+        # Compare current palm center to center 5 frames ago
+        curr_p = palm_center(self._landmark_buffer[-1])
+        prev_p = palm_center(self._landmark_buffer[-5])
+        
+        dx = curr_p[0] - prev_p[0]
+        # Threshold for swipe: 15% of screen width in 5 frames
+        if dx > 0.15:
+            self.feed_instant_label("swipe_right")
+        elif dx < -0.15:
+            self.feed_instant_label("swipe_left")
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         results: list[ClassificationResult] = []
@@ -482,12 +492,6 @@ class GestureClassifier:
       - Once an instant action fires, ALL classification is suppressed for
         ``blanking_ms`` to prevent hand-transition noise from triggering
         unintended actions.
-
-    Mode system:
-      - Two operational modes: "touchpad" (cursor/scroll) and "keybind" (gestures).
-      - Gestures declare which modes they are active in via ``active_modes``.
-      - Gestures with ``mode_toggle: true`` switch between modes and are
-        immune to blanking so the user can always switch back.
     """
 
     def __init__(
@@ -513,29 +517,7 @@ class GestureClassifier:
 
         # Global blanking timestamp – 0 means inactive
         self._blanking_until: int = 0
-
-        # Mode state
-        self._current_mode: str = "touchpad"  # "touchpad" | "keybind"
-        self._mappings = mappings  # keep reference for mode lookups
-
-    @property
-    def current_mode(self) -> str:
-        return self._current_mode
-
-    def _is_mode_active(self, gesture_name: str) -> bool:
-        """Check if a gesture is active in the current mode."""
-        for m in self._mappings:
-            if m.name == gesture_name:
-                modes = m.active_modes
-                return "both" in modes or self._current_mode in modes
-        return False
-
-    def _is_mode_toggle(self, gesture_name: str) -> bool:
-        """Check if a gesture is a mode toggle."""
-        for m in self._mappings:
-            if m.name == gesture_name:
-                return m.mode_toggle
-        return False
+        self._mappings = mappings  # keep reference for lookups
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         """Run all classifiers and return de-duplicated, cooldown-filtered results."""
@@ -571,30 +553,17 @@ class GestureClassifier:
         for hand in frame_result.hands:
             self.sequential.feed_landmarks(hand.landmarks)
 
-        # Filter results based on blanking, cooldowns, and mode
+        # Filter results based on blanking and cooldowns
         filtered: list[ClassificationResult] = []
         for r in all_results:
-            is_toggle = self._is_mode_toggle(r.gesture_name)
             is_continuous = self._is_continuous(r.gesture_name)
 
-            # ── Mode filter: skip gestures not active in current mode ────────
-            # This MUST apply to ALL gestures (including continuous) so touchpad
-            # cursor gestures don't fire in keybind mode
-            if not is_toggle and not self._is_mode_active(r.gesture_name):
-                logger.debug(
-                    "Gesture '%s' filtered out (not active in %s mode)",
-                    r.gesture_name,
-                    self._current_mode,
-                )
-                continue
-
             # ── Blanking filter ─────────────────────────────────────────────
-            if blanking_active and not is_continuous and not is_toggle:
+            if blanking_active and not is_continuous:
                 continue
 
             if is_continuous:
                 # Continuous gestures bypass cooldown and don't trigger blanking
-                # but mode filter was already applied above
                 filtered.append(r)
             else:
                 last = self._last_fire.get(r.gesture_name, 0)
@@ -603,46 +572,20 @@ class GestureClassifier:
                     self._last_fire[r.gesture_name] = now
                     filtered.append(r)
 
-        # If any NON-CONTINUOUS instant action fired → activate global blanking
+        # If any NON-CONTINUOUS action (instant or sequential) fired → activate global blanking
         for r in filtered:
-            if r.gesture_type == "instant" and not self._is_continuous(r.gesture_name):
+            if r.gesture_type in ("instant", "sequential") and not self._is_continuous(r.gesture_name):
                 self._blanking_until = now + self._blanking_ms
                 self._instant_streak.clear()
                 logger.info(
-                    "Instant action '%s' confirmed – blanking for %d ms",
+                    "%s action '%s' confirmed – blanking for %d ms",
+                    r.gesture_type.title(),
                     r.gesture_name,
                     self._blanking_ms,
                 )
                 break  # one trigger is enough to blank
 
-        # Apply current_mode to all results so daemon/overlay can read it
-        for r in filtered:
-            r.current_mode = self._current_mode
-
-        # Process mode toggles (after filtering, before returning)
-        for r in filtered:
-            if self._is_mode_toggle(r.gesture_name):
-                logger.info(
-                    "Mode toggle gesture '%s' triggered (current_mode before=%s)",
-                    r.gesture_name,
-                    self._current_mode,
-                )
-                self._toggle_mode()
-                r.current_mode = self._current_mode
-                break  # one toggle per frame
-
         return filtered
-
-    def _toggle_mode(self) -> None:
-        """Switch between touchpad and keybind modes."""
-        old_mode = self._current_mode
-        self._current_mode = "keybind" if self._current_mode == "touchpad" else "touchpad"
-        logger.info(
-            "Mode toggled: %s → %s (current_mode=%s)",
-            old_mode,
-            self._current_mode,
-            self._current_mode,
-        )
 
     def _is_continuous(self, gesture_name: str) -> bool:
         """Check if a gesture is marked as continuous in config."""
@@ -709,14 +652,26 @@ class GestureClassifier:
 
     def _lookup_cooldown(self, gesture_name: str) -> int:
         """Find the per-gesture cooldown_ms from mappings."""
-        for m in (
-            list(self.instant._mappings)
-            + list(self.gradual._mappings)
-            + list(self.sequential._mappings)
-        ):
+        for m in self._mappings:
             if m.name == gesture_name:
                 return m.cooldown_ms
         return 300
+
+    def reload(self, mappings: list[GestureMapping], execution: ExecutionConfig | None = None) -> None:
+        """Update classifier mappings and execution policy."""
+        self._mappings = mappings
+        exec_cfg = execution or ExecutionConfig()
+        self._confirm_frames = max(1, exec_cfg.confirm_frames)
+        self._blanking_ms = exec_cfg.blanking_ms
+        self._confidence_threshold = exec_cfg.confidence_threshold
+        
+        # Propagate to sub-classifiers
+        self.instant._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
+        self.gradual._mappings = [m for m in mappings if m.type == "gradual" and m.enabled]
+        self.sequential._mappings = [m for m in mappings if m.type == "sequential" and m.enabled]
+        
+        logger.info("GestureClassifier reloaded (blanking=%dms, confirm=%df)", 
+                    self._blanking_ms, self._confirm_frames)
 
     def close(self) -> None:
         self.instant.close()

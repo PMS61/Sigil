@@ -96,6 +96,12 @@ class Executor:
         self._use_cli = _has_hyprctl()
         self._screen_res: tuple[int, int] = (1920, 1080)  # default fallback
         
+        # Cursor state from config
+        exec_cfg = execution or ExecutionConfig()
+        self._sensitivity = getattr(exec_cfg, "sensitivity", 2.0)
+        self._smoothing_alpha = getattr(exec_cfg, "smoothing", 0.3)
+        self._last_norm_pos: tuple[float, float] | None = None
+        
         self._refresh_screen_res()
 
         if self._use_socket:
@@ -142,7 +148,13 @@ class Executor:
 
     def _dispatch_immediate(self, action: str) -> bool:
         """The actual low-level execution call (blocking in this thread)."""
-        if self._use_socket and self._socket_path:
+        # ── Smart Routing ───────────────────────────────────────────────────
+        # If the action contains shell characters (|, &, $, etc.), 
+        # we MUST use the CLI fallback which supports shell execution.
+        shell_chars = ["|", "&", "$", ";", ">", "<", "(", ")"]
+        is_complex = any(c in action for c in shell_chars)
+        
+        if self._use_socket and self._socket_path and not is_complex:
             try:
                 return self._execute_socket_sync(action)
             except OSError:

@@ -66,9 +66,7 @@ class GestureMapping:
     cooldown_ms: int = 300  # debounce
     continuous: bool = False  # If True, fires every frame without suppression
     enabled: bool = True
-    active_modes: list[str] = field(default_factory=lambda: ["both"])  # "touchpad"|"keybind"|"both"
-    mode_toggle: bool = False  # If True, toggles between touchpad/keybind modes
-    # Optional per-gesture execution policy overrides (primarily for touchpad reliability).
+    # Optional per-gesture execution policy overrides.
     # If unset, global ExecutionConfig applies.
     confirm_frames: int | None = None
     blanking_ms: int | None = None
@@ -149,10 +147,6 @@ def _parse_gestures(raw: list[dict[str, Any]]) -> list[GestureMapping]:
     mappings: list[GestureMapping] = []
     for entry in raw:
         try:
-            raw_modes = entry.get("active_modes", ["both"])
-            # Normalise: accept string or list
-            if isinstance(raw_modes, str):
-                raw_modes = [raw_modes]
             mappings.append(
                 GestureMapping(
                     name=entry["name"],
@@ -163,8 +157,6 @@ def _parse_gestures(raw: list[dict[str, Any]]) -> list[GestureMapping]:
                     cooldown_ms=entry.get("cooldown_ms", 300),
                     continuous=entry.get("continuous", False),
                     enabled=entry.get("enabled", True),
-                    active_modes=raw_modes,
-                    mode_toggle=entry.get("mode_toggle", False),
                     confirm_frames=entry.get("confirm_frames"),
                     blanking_ms=entry.get("blanking_ms"),
                     confidence_threshold=entry.get("confidence_threshold"),
@@ -257,8 +249,6 @@ def save_config(cfg: SigilConfig, path: Path | None = None) -> None:
                 "cooldown_ms": g.cooldown_ms,
                 "continuous": g.continuous,
                 "enabled": g.enabled,
-                "active_modes": g.active_modes,
-                "mode_toggle": g.mode_toggle,
                 "confirm_frames": g.confirm_frames,
                 "blanking_ms": g.blanking_ms,
                 "confidence_threshold": g.confidence_threshold,

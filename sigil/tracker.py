@@ -77,6 +77,11 @@ class Tracker:
         self._frame_count: int = 0
         self._fps_actual: float = 0.0
         self._last_time: float = 0.0
+        
+        # ── Noise Filtering State ───────────────────────────────────────────
+        # Exponential Moving Average (EMA) for each hand to reduce jitter
+        self._smoothed_lms: dict[str, np.ndarray] = {}  # "Left", "Right"
+        self._alpha = 0.45  # Smoothing factor (0.0-1.0). Lower = more stable but laggier.
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:
@@ -169,6 +174,11 @@ class Tracker:
             detection = self._detector.detect_for_video(mp_image, timestamp_ms)
             for i, hand_lm in enumerate(detection.hand_landmarks):
                 handedness_label = detection.handedness[i][0].category_name
+                raw_lms = landmark_to_array(hand_lm)
+                
+                # Apply Smoothing Filter
+                smoothed = self._apply_smoothing(handedness_label, raw_lms)
+                
                 world_lm = (
                     detection.hand_world_landmarks[i]
                     if detection.hand_world_landmarks
@@ -177,7 +187,7 @@ class Tracker:
                 result.hands.append(
                     HandResult(
                         handedness=handedness_label,
-                        landmarks=landmark_to_array(hand_lm),
+                        landmarks=smoothed,
                         world_landmarks=(
                             landmark_to_array(world_lm) if world_lm else None
                         ),
@@ -191,13 +201,15 @@ class Tracker:
                 for i, hand_lm in enumerate(detection.multi_hand_landmarks):
                     label = "Right"
                     if detection.multi_handedness:
-                        label = detection.multi_handedness[i].classification[
-                            0
-                        ].label
+                        label = detection.multi_handedness[i].classification[0].label
+                    
+                    raw_lms = landmark_to_array(hand_lm.landmark)
+                    smoothed = self._apply_smoothing(label, raw_lms)
+                    
                     result.hands.append(
                         HandResult(
                             handedness=label,
-                            landmarks=landmark_to_array(hand_lm.landmark),
+                            landmarks=smoothed,
                             score=(
                                 detection.multi_handedness[i]
                                 .classification[0]
@@ -208,7 +220,25 @@ class Tracker:
                         )
                     )
 
+        # Clear smoothing state for hands not detected this frame
+        detected_labels = {h.handedness for h in result.hands}
+        for label in list(self._smoothed_lms.keys()):
+            if label not in detected_labels:
+                del self._smoothed_lms[label]
+
         return result
+
+    def _apply_smoothing(self, label: str, current: np.ndarray) -> np.ndarray:
+        """Apply Exponential Moving Average to landmarks."""
+        if label not in self._smoothed_lms:
+            self._smoothed_lms[label] = current
+            return current
+        
+        # EMA: Smoothed = (1 - alpha) * Prev + alpha * Current
+        prev = self._smoothed_lms[label]
+        smoothed = (1.0 - self._alpha) * prev + self._alpha * current
+        self._smoothed_lms[label] = smoothed
+        return smoothed
 
     # ── introspection ────────────────────────────────────────────────────────
     @property

@@ -82,7 +82,7 @@ def finger_curl_angles(landmarks: np.ndarray) -> np.ndarray:
 
 
 def count_extended_fingers(landmarks: np.ndarray, handedness: str = "Right") -> int:
-    """Returns number of fingers extended (0-5). Uses ultra-strict joint detection."""
+    """Returns number of fingers extended (0-5). Uses balanced joint detection."""
     # Finger tips: 8 (index), 12 (middle), 16 (ring), 20 (pinky)
     # PIP joints: 6 (index), 10 (middle), 14 (ring), 18 (pinky)
     tips = [8, 12, 16, 20]
@@ -90,32 +90,26 @@ def count_extended_fingers(landmarks: np.ndarray, handedness: str = "Right") -> 
 
     extended_count = 0
 
-    # 1. 4 Fingers: Check if tip is significantly further from wrist (0) than the PIP joint
-    # Use 1.3 buffer for "extreme" solidity.
+    # 1. 4 Fingers: Check if tip is further from wrist (0) than the PIP joint
+    # Reduced to 1.15 for better detection at angles
     wrist = landmarks[0]
     for tip, pip in zip(tips, pips, strict=False):
         tip_dist = euclidean(landmarks[tip], wrist)
         pip_dist = euclidean(landmarks[pip], wrist)
-        if tip_dist > pip_dist * 1.3:
+        if tip_dist > pip_dist * 1.15:
             extended_count += 1
 
-    # 2. Thumb: Use horizontal separation from the index finger base (5)
-    # This is much more reliable for detecting a "tucked" thumb.
+    # 2. Thumb: Use distance from the base of the pinky (17)
+    # This is more robust to rotation than X-coordinate checks.
     thumb_tip = landmarks[4]
-    index_mcp = landmarks[5]
+    thumb_ip = landmarks[3]
     pinky_mcp = landmarks[17]
     
-    # Calculate palm width for normalization
-    palm_width = euclidean(index_mcp, pinky_mcp)
+    tip_to_pinky = euclidean(thumb_tip, pinky_mcp)
+    ip_to_pinky = euclidean(thumb_ip, pinky_mcp)
     
-    # Thumb must be horizontally far from index base to be "extended"
-    # For Right hand, thumb is to the left (smaller X)
-    if handedness == "Right":
-        if thumb_tip[0] < index_mcp[0] - (palm_width * 0.4):
-            extended_count += 1
-    else:
-        if thumb_tip[0] > index_mcp[0] + (palm_width * 0.4):
-            extended_count += 1
+    if tip_to_pinky > ip_to_pinky * 1.1:
+        extended_count += 1
 
     return extended_count
 

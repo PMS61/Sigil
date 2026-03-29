@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,7 @@ import gi  # type: ignore[import-untyped] # noqa: E402
 
 gi.require_version("Gtk", "4.0")  # noqa: E402
 gi.require_version("Gdk", "4.0")  # noqa: E402
-from gi.repository import Gdk, GLib, Gtk  # type: ignore[import-untyped] # noqa: E402
+from gi.repository import Gdk, GLib, Gtk, Pango  # type: ignore[import-untyped] # noqa: E402
 
 if HAS_LAYER_SHELL:
     gi.require_version("Gtk4LayerShell", "1.0")
@@ -137,7 +138,9 @@ class WaylandOverlay:
         self._recording_progress: float = 0.0
         self._toasts: list[_Toast] = []
         self._is_recording: bool = False
-        self._current_mode: str = "touchpad"  # "touchpad" | "keybind"
+        self._show_help: bool = True
+        self._activity_log: deque[str] = deque(maxlen=3)  # Last 3 actions
+        self._trigger_flash: float = 0.0  # Landmark pulse on trigger
 
         # Cairo surface for camera (reused across frames)
         self._cam_surface: Any = None
@@ -159,6 +162,9 @@ class WaylandOverlay:
         self._progress_bar: Gtk.ProgressBar | None = None
         self._toast_box: Gtk.Box | None = None
         self._mode_badge: Gtk.Label | None = None
+        self._help_box: Gtk.Box | None = None
+        self._help_window: Gtk.Window | None = None
+        self._help_grid: Gtk.Grid | None = None
 
     # ── Properties ───────────────────────────────────────────────────────────
     @property
@@ -168,7 +174,9 @@ class WaylandOverlay:
     def set_enabled(self, val: bool) -> None:
         self._enabled = val
         if self._window:
-            self._window.set_visible(val)
+            GLib.idle_add(self._window.set_visible, val)
+        if self._help_window:
+            GLib.idle_add(self._help_window.set_visible, val and self._show_help)
 
     def set_recording_status(self, status: str) -> None:
         """Update recording-mode status (called by Recorder)."""
@@ -186,16 +194,64 @@ class WaylandOverlay:
         if len(self._toasts) > 3:
             self._toasts = self._toasts[-3:]
 
+    def toggle_help(self) -> bool:
+        """Toggle help section visibility. Returns new state."""
+        self._show_help = not self._show_help
+        logger.info("Toggling help window visibility → %s", self._show_help)
+        
+        if self._help_window:
+            # Must run on UI thread
+            def _apply():
+                if self._show_help:
+                    self._help_window.present()
+                else:
+                    self._help_window.set_visible(False)
+            GLib.idle_add(_apply)
+        return self._show_help
+
+    def set_help_content(self, hints: list[tuple[str, str]]) -> None:
+        """Update the gesture hint list dynamically."""
+        if not self._help_grid:
+            self._pending_help_hints = hints
+            return
+            
+        if hasattr(self, "_pending_help_hints"):
+            del self._pending_help_hints
+            
+        # Clear existing
+        child = self._help_grid.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self._help_grid.remove(child)
+            child = next_child
+            
+        # Add new hints in 2 columns
+        for i, (trigger, effect) in enumerate(hints):
+            col = (i % 2) * 2 # 0 or 2
+            row = i // 2
+            
+            t_lbl = Gtk.Label(label=trigger)
+            t_lbl.add_css_class("sigil-help-trigger")
+            t_lbl.set_halign(Gtk.Align.START)
+            
+            e_lbl = Gtk.Label(label=effect)
+            e_lbl.add_css_class("sigil-help-effect")
+            e_lbl.set_halign(Gtk.Align.START)
+            
+            self._help_grid.attach(t_lbl, col, row, 1, 1)
+            self._help_grid.attach(e_lbl, col + 1, row, 1, 1)
+
     # ── GTK Application ──────────────────────────────────────────────────────
     def create_window(self, app: Gtk.Application) -> Gtk.Window:
         """Build the overlay window and all widgets. Called during app activation."""
         self._app = app
         self._window = Gtk.Window(application=app)
         self._window.set_title("Sigil")
-        self._window.set_default_size(self._cam_w + 24, self._cam_h + 200)
+        # FIXED WIDTH: Prevents window jumping
+        self._window.set_default_size(self._cam_w + 32, -1)
         self._window.set_resizable(False)
         self._window.set_decorated(False)
-        logger.debug("Created GTK window with size %dx%d", self._cam_w + 24, self._cam_h + 200)
+        logger.debug("Created GTK window with fixed width %d", self._cam_w + 32)
 
         # ── Layer-shell setup ────────────────────────────────────────────────
         self._layer_shell_active = False
@@ -254,10 +310,17 @@ class WaylandOverlay:
 
         # ── Widget tree ──────────────────────────────────────────────────────
         self._build_ui()
+        self._build_help_window()
+
+        # Apply any pending help content after UI is fully built
+        if hasattr(self, "_pending_help_hints"):
+            self.set_help_content(self._pending_help_hints)
 
         if self._enabled:
             logger.info("Presenting overlay window (enabled=%s)", self._enabled)
             self._window.present()
+            if self._show_help and self._help_window:
+                self._help_window.present()
         else:
             logger.debug("Overlay window created but not visible (enabled=False)")
 
@@ -285,8 +348,9 @@ class WaylandOverlay:
         assert self._window is not None
 
         # Root box
-        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         panel.add_css_class("sigil-panel")
+        panel.set_size_request(self._cam_w + 24, -1)
         self._window.set_child(panel)
 
         # ── Camera preview ───────────────────────────────────────────────────
@@ -298,51 +362,36 @@ class WaylandOverlay:
             self._camera_area.set_draw_func(self._on_camera_draw)
             panel.append(self._camera_area)
 
-        # ── Status row (FPS + hands) ─────────────────────────────────────────
-        status_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        status_row.add_css_class("sigil-status")
-        panel.append(status_row)
+        # ── Status Header ────────────────────────────────────────────────────
+        header = Gtk.CenterBox()
+        header.add_css_class("sigil-header")
+        panel.append(header)
 
-        # Mode badge
-        self._mode_badge = Gtk.Label(label="TRACK")
+        self._mode_badge = Gtk.Label(label="SIGIL")
         self._mode_badge.add_css_class("sigil-mode-badge")
-        status_row.append(self._mode_badge)
+        header.set_start_widget(self._mode_badge)
 
-        self._lbl_fps = Gtk.Label(label="0 fps")
+        self._lbl_fps = Gtk.Label(label="0 FPS")
         self._lbl_fps.add_css_class("sigil-fps")
-        self._lbl_fps.set_hexpand(True)
-        self._lbl_fps.set_halign(Gtk.Align.END)
-        status_row.append(self._lbl_fps)
+        header.set_end_widget(self._lbl_fps)
 
-        # Finger count label
-        self._lbl_fingers = Gtk.Label(label="0 fingers")
-        self._lbl_fingers.add_css_class("sigil-fingers")
-        self._lbl_fingers.set_halign(Gtk.Align.END)
-        status_row.append(self._lbl_fingers)
+        # ── Info Section (Fixed Height to prevent jumping) ──────────────────
+        info_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        info_stack.set_size_request(-1, 64) 
+        panel.append(info_stack)
 
-        # Hands label
-        self._lbl_hands = Gtk.Label(label="No hands")
-        self._lbl_hands.add_css_class("sigil-hands")
-        self._lbl_hands.set_halign(Gtk.Align.START)
-        panel.append(self._lbl_hands)
-
-        # ── Separator ────────────────────────────────────────────────────────
-        sep = Gtk.Separator()
-        sep.add_css_class("sigil-separator")
-        panel.append(sep)
-
-        # ── Gesture info ─────────────────────────────────────────────────────
-        self._lbl_gesture = Gtk.Label(label="Waiting for gesture…")
+        self._lbl_gesture = Gtk.Label(label="Ready")
         self._lbl_gesture.add_css_class("sigil-gesture-none")
         self._lbl_gesture.set_halign(Gtk.Align.START)
-        self._lbl_gesture.set_wrap(True)
-        panel.append(self._lbl_gesture)
+        self._lbl_gesture.set_ellipsize(Pango.EllipsizeMode.END)
+        info_stack.append(self._lbl_gesture)
 
-        self._lbl_action = Gtk.Label(label="")
-        self._lbl_action.add_css_class("sigil-action")
-        self._lbl_action.set_halign(Gtk.Align.START)
-        self._lbl_action.set_visible(False)
-        panel.append(self._lbl_action)
+        self._activity_label = Gtk.Label(label="Waiting for input...")
+        self._activity_label.add_css_class("sigil-action")
+        self._activity_label.set_halign(Gtk.Align.START)
+        self._activity_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._activity_label.set_lines(2) # Show last 2 lines
+        info_stack.append(self._activity_label)
 
         # ── Recording section (hidden by default) ────────────────────────────
         self._recording_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -374,6 +423,62 @@ class WaylandOverlay:
         # ── Toast area ───────────────────────────────────────────────────────
         self._toast_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         panel.append(self._toast_box)
+
+    def _build_help_window(self) -> None:
+        """Create a separate, toggleable window for all gesture hints."""
+        if self._app is None:
+            return
+            
+        self._help_window = Gtk.Window(application=self._app)
+        self._help_window.set_title("Sigil Help")
+        self._help_window.set_default_size(360, -1)
+        self._help_window.set_decorated(False)
+        self._help_window.add_css_class("sigil-help-window")
+
+        if HAS_LAYER_SHELL:
+            try:
+                Gtk4LayerShell.init_for_window(self._help_window)
+                Gtk4LayerShell.set_layer(self._help_window, Gtk4LayerShell.Layer.OVERLAY)
+                Gtk4LayerShell.set_namespace(self._help_window, "sigil-help")
+                
+                # Keyboard interactivity: NONE means click-through
+                # CRITICAL: Prevents 'killactive' from hitting this window
+                Gtk4LayerShell.set_keyboard_mode(self._help_window, Gtk4LayerShell.KeyboardMode.NONE)
+
+                # Position it near the main overlay (top-right of bottom-right)
+                anchors = _ANCHOR_MAP.get(self._position, ["BOTTOM", "RIGHT"])
+                for edge_name in anchors:
+                    edge = getattr(Gtk4LayerShell.Edge, edge_name)
+                    Gtk4LayerShell.set_anchor(self._help_window, edge, True)
+                    
+                    margin = self._margin
+                    if "BOTTOM" in edge_name:
+                        # Increased from 220 to 320 to avoid overlap with growing toasts
+                        margin += 320 
+                    Gtk4LayerShell.set_margin(self._help_window, edge, margin)
+                
+                logger.info("Help window initialized with layer-shell")
+            except Exception as exc:
+                logger.warning("Help window layer-shell setup failed: %s", exc)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root.add_css_class("sigil-help-panel")
+        self._help_window.set_child(root)
+
+        title = Gtk.Label(label="SIGIL GESTURES")
+        title.add_css_class("sigil-help-window-title")
+        root.append(title)
+
+        self._help_grid = Gtk.Grid()
+        self._help_grid.set_column_spacing(20)
+        self._help_grid.set_row_spacing(6)
+        root.append(self._help_grid)
+
+        # Initially visible if state is True
+        if self._show_help:
+            self._help_window.present()
+        else:
+            self._help_window.set_visible(False)
 
     # ── Drawing (Cairo) ──────────────────────────────────────────────────────
     def _on_camera_draw(
@@ -419,7 +524,26 @@ class WaylandOverlay:
 
         # ── Draw hand landmarks ──────────────────────────────────────────────
         for hand in fr.hands:
+            # TRIGGER PULSE: Glow hand landmarks on successful fire
+            if self._trigger_flash > 0:
+                glow_alpha = self._trigger_flash * 0.6
+                cr.set_source_rgba(0.5, 1.0, 0.5, glow_alpha)
+                # Draw a larger blurred shadow/glow behind hand
+                for lm in hand.landmarks:
+                    cr.arc(lm[0]*width, lm[1]*height, 6, 0, 2*math.pi)
+                    cr.fill()
+
             draw_hand(cr, hand, width, height)
+            
+            # PROXIMITY WARNING: If any landmark is too close to edge
+            # (indicating hand might be getting cut off)
+            lm = hand.landmarks
+            if (lm[:, 0].min() < 0.05 or lm[:, 0].max() > 0.95 or 
+                lm[:, 1].min() < 0.05 or lm[:, 1].max() > 0.95):
+                cr.set_source_rgba(1.0, 0.3, 0.3, 0.4)
+                cr.set_line_width(2)
+                draw_rounded_rect(cr, 4, 4, width - 8, height - 8, 10)
+                cr.stroke()
 
         # ── Recording border pulse ───────────────────────────────────────────
         if self._is_recording:
@@ -466,7 +590,6 @@ class WaylandOverlay:
         frame_result: FrameResult | None,
         classifications: list[ClassificationResult] | None = None,
         fps: float = 0.0,
-        current_mode: str = "touchpad",
     ) -> None:
         """Update overlay state and queue a redraw.
 
@@ -478,7 +601,6 @@ class WaylandOverlay:
         self._current_frame = frame_result
         self._classifications = classifications or []
         self._fps = fps
-        self._current_mode = current_mode
 
         # ── Update camera surface if frame present ───────────────────────────
         if self._show_camera and frame_result and frame_result.frame is not None:
@@ -493,46 +615,38 @@ class WaylandOverlay:
 
         # ── Update labels ────────────────────────────────────────────────────
         if self._lbl_fps:
-            self._lbl_fps.set_text(f"{fps:.0f} fps")
-
-        if self._lbl_hands and frame_result:
-            n = len(frame_result.hands)
-            if n == 0:
-                self._lbl_hands.set_text("No hands detected")
-            else:
-                parts = [f"{h.handedness} ({h.score:.0%})" for h in frame_result.hands]
-                self._lbl_hands.set_text("  ".join(parts))
-
-        # Finger count label
-        if self._lbl_fingers and frame_result and frame_result.right:
-            from sigil.utils import count_extended_fingers
-
-            count = count_extended_fingers(frame_result.right.landmarks, frame_result.right.handedness)
-            self._lbl_fingers.set_text(f"{count} fingers")
-        elif self._lbl_fingers:
-            self._lbl_fingers.set_text("0 fingers")
+            self._lbl_fps.set_text(f"{fps:.0f} FPS")
 
         # Gesture label
         if self._lbl_gesture:
             if self._classifications:
                 top = self._classifications[0]
-                self._lbl_gesture.set_text(f"✋ {top.gesture_name}  ({top.confidence:.0%})")
+                self._lbl_gesture.set_text(f"✋ {top.gesture_name.replace('_', ' ').title()}")
                 self._lbl_gesture.remove_css_class("sigil-gesture-none")
                 self._lbl_gesture.add_css_class("sigil-gesture")
+                
+                # Update Activity Log
+                msg = f"Fired: {top.gesture_name.replace('_', ' ')}"
+                if not self._activity_log or self._activity_log[-1] != msg:
+                    self._activity_log.append(msg)
+                    self._trigger_flash = 1.0 # Start pulse
             else:
-                self._lbl_gesture.set_text("Waiting for gesture…")
+                self._lbl_gesture.set_text("Waiting...")
                 self._lbl_gesture.remove_css_class("sigil-gesture")
                 self._lbl_gesture.add_css_class("sigil-gesture-none")
 
-        # Action label (last fired)
-        if self._lbl_action:
-            if self._classifications:
-                # Show raw_label or gesture action hint
-                self._lbl_action.set_visible(True)
-                labels = " │ ".join(c.raw_label or c.gesture_name for c in self._classifications)
-                self._lbl_action.set_text(labels)
+        # Activity Log (consolidated label)
+        if self._activity_label:
+            if self._activity_log:
+                lines = list(self._activity_log)
+                # Show last 2 lines, dim previous
+                self._activity_label.set_text("\n".join(lines))
             else:
-                self._lbl_action.set_visible(False)
+                self._activity_label.set_text("System active")
+        
+        # Decay trigger flash
+        if self._trigger_flash > 0:
+            self._trigger_flash = max(0.0, self._trigger_flash - 0.05)
 
         # Recording section
         if self._recording_box:
@@ -547,26 +661,15 @@ class WaylandOverlay:
             if self._mode_badge:
                 self._mode_badge.set_text("REC")
                 self._mode_badge.remove_css_class("sigil-mode-badge")
-                self._mode_badge.remove_css_class("sigil-mode-badge-touchpad")
-                self._mode_badge.remove_css_class("sigil-mode-badge-keybind")
                 self._mode_badge.add_css_class("sigil-mode-badge-recording")
             if self._camera_area:
                 self._camera_area.remove_css_class("sigil-camera")
                 self._camera_area.add_css_class("sigil-camera-recording")
         else:
             if self._mode_badge:
-                if self._current_mode == "keybind":
-                    self._mode_badge.set_text("KEYS")
-                    self._mode_badge.remove_css_class("sigil-mode-badge")
-                    self._mode_badge.remove_css_class("sigil-mode-badge-touchpad")
-                    self._mode_badge.remove_css_class("sigil-mode-badge-recording")
-                    self._mode_badge.add_css_class("sigil-mode-badge-keybind")
-                else:
-                    self._mode_badge.set_text("TOUCH")
-                    self._mode_badge.remove_css_class("sigil-mode-badge")
-                    self._mode_badge.remove_css_class("sigil-mode-badge-keybind")
-                    self._mode_badge.remove_css_class("sigil-mode-badge-recording")
-                    self._mode_badge.add_css_class("sigil-mode-badge-touchpad")
+                self._mode_badge.set_text("SIGIL")
+                self._mode_badge.remove_css_class("sigil-mode-badge-recording")
+                self._mode_badge.add_css_class("sigil-mode-badge")
             if self._camera_area:
                 self._camera_area.remove_css_class("sigil-camera-recording")
                 self._camera_area.add_css_class("sigil-camera")
@@ -609,6 +712,9 @@ class WaylandOverlay:
     # ── Cleanup ──────────────────────────────────────────────────────────────
     def close(self) -> None:
         """Destroy the overlay window."""
+        if self._help_window:
+            self._help_window.close()
+            self._help_window = None
         if self._window:
             self._window.close()
             self._window = None
@@ -648,7 +754,7 @@ class SigilGtkApp(Gtk.Application):
     def do_activate(self) -> None:
         """Create window and start frame timer if callback provided."""
         self._overlay.create_window(self)
-
+        
         # Start the frame processing timer if we have a callback (legacy/sync mode)
         if self._frame_cb:
             interval_ms = max(1, 1000 // self._target_fps)

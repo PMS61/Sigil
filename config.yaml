@@ -27,9 +27,9 @@ tracking:
   zoom: 1.0
 
 execution:
-  confirm_frames: 2
+  confirm_frames: 3
   blanking_ms: 1200
-  confidence_threshold: 0.65
+  confidence_threshold: 0.75
 
 recording:
   hotkey: "Super+Alt+G"
@@ -148,13 +148,6 @@ gestures:
     condition: { pose: "Thumb_Down" }
     action: "hyprctl dispatch exec playerctl previous"
     cooldown_ms: 400
-
-  - name: toggle_help
-    type: instant
-    hand: left
-    condition: { pose: "Victory" }
-    action: "sigil:toggle_help"
-    cooldown_ms: 1000
 
   # ── GRADUAL: Volume Control ──────────────────────────────────────────────
   - name: volume_up

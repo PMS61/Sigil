@@ -17,7 +17,7 @@ import signal
 import time
 
 from sigil.classifier import GestureClassifier
-from sigil.config import SigilConfig, load_config
+from sigil.config import CONFIG_FILE, SigilConfig, load_config
 from sigil.executor import ActionMapper, Executor
 from sigil.overlay import Overlay
 from sigil.recorder import Recorder, RecordMode
@@ -66,6 +66,26 @@ class Daemon:
         # Stats
         self._frames_processed: int = 0
         self._actions_fired: int = 0
+        
+        # Hot-reload state
+        self._config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else 0
+
+    def _check_config_reload(self) -> None:
+        """Poll for config file changes and reload if necessary."""
+        if not CONFIG_FILE.exists():
+            return
+            
+        mtime = CONFIG_FILE.stat().st_mtime
+        if mtime > self._config_mtime:
+            logger.info("Config file changed – hot-reloading …")
+            self.reload_config()
+            self._config_mtime = mtime
+            
+            # Notify overlay
+            wayland_ov = self._overlay.get_wayland_overlay()
+            if wayland_ov:
+                from gi.repository import GLib
+                GLib.idle_add(wayland_ov.add_toast, "Config reloaded", 1.5, "blue")
 
     # ── Public API ───────────────────────────────────────────────────────────
     def run(self) -> None:
@@ -98,6 +118,9 @@ class Daemon:
         logger.info("Overlay backend: %s", self._overlay.backend)
         logger.info("Overlay enabled: %s", self._overlay.enabled)
 
+        # Populate initial help content
+        self.reload_config()
+
         # Start processing loop in a background thread
         self._worker_thread = threading.Thread(
             target=self._gtk_worker_loop, name="SigilWorker", daemon=True
@@ -117,7 +140,6 @@ class Daemon:
         from gi.repository import GLib
 
         target_interval = 1.0 / self._cfg.tracking.target_fps
-        prev_mode = self._classifier.current_mode
 
         try:
             while self._running:
@@ -130,6 +152,9 @@ class Daemon:
 
                 self._frames_processed += 1
 
+                # Hot-reload
+                self._check_config_reload()
+
                 # Recording
                 if self._recorder.is_active:
                     self._recorder.capture(frame)
@@ -137,23 +162,15 @@ class Daemon:
                 # Classify
                 results = self._classifier.classify(frame)
 
-                # Detect mode transition
-                cur_mode = self._classifier.current_mode
-                if cur_mode != prev_mode:
-                    mode_label = "TOUCHPAD" if cur_mode == "touchpad" else "KEYBIND"
-                    wayland_ov = self._overlay.get_wayland_overlay()
-                    if wayland_ov:
-                        GLib.idle_add(
-                            wayland_ov.add_toast,
-                            f"Mode → {mode_label}",
-                            2.0,
-                            "blue",
-                        )
-                    prev_mode = cur_mode
-
                 # Execute (synchronous in worker thread)
                 for result in results:
                     action = self._mapper.resolve(result)
+                    if action == "sigil:toggle_help":
+                        wayland_ov = self._overlay.get_wayland_overlay()
+                        if wayland_ov:
+                            GLib.idle_add(wayland_ov.toggle_help)
+                        continue
+
                     if action:
                         logger.info(
                             "Gesture '%s' → %s (conf=%.2f)",
@@ -179,7 +196,6 @@ class Daemon:
                         frame,
                         results,
                         self._tracker.fps,
-                        self._classifier.current_mode,
                     )
 
                 # Control FPS
@@ -210,20 +226,17 @@ class Daemon:
             self._recorder.capture(frame)
 
         # Classify
-        prev_mode = self._classifier.current_mode
         results = self._classifier.classify(frame)
-        cur_mode = self._classifier.current_mode
-
-        # Detect mode transition
-        if cur_mode != prev_mode:
-            mode_label = "TOUCHPAD" if cur_mode == "touchpad" else "KEYBIND"
-            wayland_ov = self._overlay.get_wayland_overlay()
-            if wayland_ov:
-                wayland_ov.add_toast(f"Mode → {mode_label}", 2.0, "blue")
 
         # Execute (synchronous)
         for result in results:
             action = self._mapper.resolve(result)
+            if action == "sigil:toggle_help":
+                wayland_ov = self._overlay.get_wayland_overlay()
+                if wayland_ov:
+                    wayland_ov.toggle_help()
+                continue
+
             if action:
                 logger.info(
                     "Gesture '%s' → %s (conf=%.2f)",
@@ -246,7 +259,6 @@ class Daemon:
                 frame,
                 results,
                 fps=self._tracker.fps,
-                current_mode=self._classifier.current_mode,
             )
 
         return True
@@ -278,21 +290,25 @@ class Daemon:
 
                 self._frames_processed += 1
 
+                # Hot-reload
+                self._check_config_reload()
+
                 # 2. Recording mode capture
                 if self._recorder.is_active:
                     self._recorder.capture(frame)
 
                 # 3. Classify gestures
-                prev_mode = self._classifier.current_mode
                 results = self._classifier.classify(frame)
-
-                # Log mode transitions
-                if self._classifier.current_mode != prev_mode:
-                    logger.info("Mode switched to '%s'", self._classifier.current_mode)
 
                 # 4. Execute matched actions
                 for result in results:
                     action = self._mapper.resolve(result)
+                    if action == "sigil:toggle_help":
+                        wayland_ov = self._overlay.get_wayland_overlay()
+                        if wayland_ov:
+                            wayland_ov.toggle_help()
+                        continue
+
                     if action:
                         logger.info(
                             "Gesture '%s' → %s (conf=%.2f)",
@@ -376,17 +392,25 @@ class Daemon:
         """Re-read config and update mapper without restarting."""
         self._cfg = load_config()
         self._mapper.reload(self._cfg)
+        self._classifier.reload(self._cfg.gestures, self._cfg.execution)
         logger.info("Config reloaded")
-
-    # ── Mode control ─────────────────────────────────────────────────────────
-    def toggle_mode(self) -> str:
-        """Manually toggle between touchpad and keybind modes.
-
-        Returns the new mode name.
-        """
-        self._classifier._toggle_mode()
-        return self._classifier.current_mode
-
-    def get_mode(self) -> str:
-        """Return the current operational mode."""
-        return self._classifier.current_mode
+        
+        # Update overlay help hints
+        wayland_ov = self._overlay.get_wayland_overlay()
+        if wayland_ov:
+            hints = []
+            seen = set()
+            for g in self._cfg.gestures:
+                if not g.enabled: continue
+                # Extract trigger label (Pose name or feature)
+                trigger = g.condition.get("pose") or g.condition.get("feature") or g.name
+                trigger = trigger.replace("_", " ").title()
+                if trigger in seen: continue
+                
+                # Simple effect description
+                effect = g.name.replace("_", " ").title()
+                hints.append((trigger, effect))
+                seen.add(trigger)
+            
+            from gi.repository import GLib
+            GLib.idle_add(wayland_ov.set_help_content, hints) # Show all gestures
