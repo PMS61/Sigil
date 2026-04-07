@@ -9,7 +9,6 @@ Hotkey-toggled, with UI feedback via overlay callbacks.
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import time
@@ -23,7 +22,6 @@ import cv2
 
 from sigil.config import RECORDINGS_DIR, RecordingConfig
 from sigil.tracker import FrameResult, HandResult
-from sigil.utils import finger_curl_angles, palm_center, thumb_index_distance
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +121,7 @@ class Recorder:
         if self._session.mode == RecordMode.SEQUENTIAL and self._session._seq_buffer:
             self._save_sequence()
         self._session.active = False
-        self._emit(
-            f"Recording stopped: {self._session.sample_count} samples saved"
-        )
+        self._emit(f"Recording stopped: {self._session.sample_count} samples saved")
         logger.info(
             "Recording stopped: class=%s samples=%d",
             self._session.class_name,
@@ -177,7 +173,12 @@ class Recorder:
 
     # ── Instant capture ──────────────────────────────────────────────────────
     def _capture_instant(self, fr: FrameResult, hand: HandResult) -> bool:
-        """Save annotated RGB frame to class folder (Model Maker compatible §5.3)."""
+        """Save annotated RGB frame and raw landmarks to class folder.
+
+        Saves both:
+        - .jpg: cropped image for visualization
+        - .json: raw 21-point landmarks for training with augmentation
+        """
         if fr.frame is None:
             return False
 
@@ -196,30 +197,29 @@ class Recorder:
         if crop.size == 0:
             return False
 
+        # Save cropped image
         fname = s.output_dir / f"{s.sample_count:05d}.jpg"
         cv2.imwrite(str(fname), crop)
+
+        # Save raw landmarks as JSON for training
+        raw_data = self._save_raw_landmarks(fr, hand)
+        json_fname = s.output_dir / f"{s.sample_count:05d}.json"
+        with open(json_fname, "w") as fh:
+            json.dump(raw_data, fh)
+
         s.sample_count += 1
         self._emit(f"[instant] {s.sample_count}/{s.target_count}")
         return True
 
     # ── Gradual capture ──────────────────────────────────────────────────────
     def _capture_gradual(self, fr: FrameResult, hand: HandResult) -> bool:
-        """Save normalised landmark features for one frame + derived metrics."""
+        """Save raw 21-point landmarks for one frame."""
         s = self._session
-        features = self._extract_features(fr, hand)
+        raw_data = self._save_raw_landmarks(fr, hand)
 
         fname = s.output_dir / f"{s.sample_count:05d}.json"
         with open(fname, "w") as fh:
-            json.dump(features, fh)
-
-        # Also append to CSV for Model Maker / sklearn convenience
-        csv_path = s.output_dir / "features.csv"
-        is_new = not csv_path.exists()
-        with open(csv_path, "a", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=sorted(features.keys()))
-            if is_new:
-                writer.writeheader()
-            writer.writerow(features)
+            json.dump(raw_data, fh)
 
         s.sample_count += 1
         self._emit(f"[gradual] {s.sample_count}/{s.target_count}")
@@ -227,13 +227,12 @@ class Recorder:
 
     # ── Sequential capture ───────────────────────────────────────────────────
     def _capture_sequential(self, fr: FrameResult, hand: HandResult) -> bool:
-        """Buffer landmark frames; save full sequence on stop or target hit."""
+        """Buffer raw landmark frames; save full sequence on stop or target hit."""
         s = self._session
-        features = self._extract_features(fr, hand)
-        features["frame_index"] = len(s._seq_buffer)
-        s._seq_buffer.append(features)
+        raw_data = self._save_raw_landmarks(fr, hand)
+        raw_data["frame_index"] = len(s._seq_buffer)
+        s._seq_buffer.append(raw_data)
 
-        # Auto-save every 30 frames as one sequence sample
         if len(s._seq_buffer) >= 30:
             self._save_sequence()
             return True
@@ -250,26 +249,44 @@ class Recorder:
         s.sample_count += 1
         self._emit(f"[sequential] {s.sample_count}/{s.target_count}")
 
-    # ── Feature extraction ───────────────────────────────────────────────────
+    # ── Raw landmark storage ─────────────────────────────────────────────────
     @staticmethod
-    def _extract_features(fr: FrameResult, hand: HandResult) -> dict[str, Any]:
-        lm = hand.landmarks
-        curls = finger_curl_angles(lm)
-        center = palm_center(lm)
+    def _save_raw_landmarks(fr: FrameResult, hand: HandResult) -> dict[str, Any]:
+        """Save raw 21-point 3D landmarks for augmentation during training.
+
+        Stores:
+        - landmarks: 21 x [x, y, z] raw normalized coordinates
+        - handedness: "Left" or "Right"
+        - timestamp_ms: frame timestamp
+        """
         return {
             "timestamp_ms": fr.timestamp_ms,
             "handedness": hand.handedness,
-            "thumb_index_dist": float(thumb_index_distance(lm)),
-            "palm_x": float(center[0]),
-            "palm_y": float(center[1]),
-            "curl_thumb": float(curls[0]),
-            "curl_index": float(curls[1]),
-            "curl_middle": float(curls[2]),
-            "curl_ring": float(curls[3]),
-            "curl_pinky": float(curls[4]),
-            # Flattened normalised landmarks (63 values)
-            **{f"lm_{i}_{c}": float(lm[i][j]) for i in range(21) for j, c in enumerate("xyz")},
+            "landmarks": hand.landmarks.tolist(),
         }
+
+    @staticmethod
+    def _extract_features_from_raw(raw_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract 96 geometric features from raw landmark data."""
+        import numpy as np
+        from sigil.utils import extract_96_features
+
+        landmarks = np.array(raw_data["landmarks"], dtype=np.float32)
+        features = extract_96_features(landmarks)
+
+        feature_dict = {
+            "timestamp_ms": raw_data["timestamp_ms"],
+            "handedness": raw_data["handedness"],
+        }
+        for i, val in enumerate(features):
+            feature_dict[f"feat_{i}"] = float(val)
+        return feature_dict
+
+    # ── Feature extraction ───────────────────────────────────────────────────
+    @staticmethod
+    def _extract_features(fr: FrameResult, hand: HandResult) -> dict[str, Any]:
+        """Extract all 96 geometric features from hand landmarks."""
+        return Recorder._extract_features_from_raw(Recorder._save_raw_landmarks(fr, hand))
 
     # ── Helpers ──────────────────────────────────────────────────────────────
     def _pick_hand(self, fr: FrameResult) -> HandResult | None:

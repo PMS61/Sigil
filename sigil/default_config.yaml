@@ -18,12 +18,14 @@ tracking:
   num_hands: 2
   min_detection_confidence: 0.7
   min_tracking_confidence: 0.6
-  model_asset_path: hand_landmarker.task
+  model_asset_path: gesture_recognizer.task
   camera_id: 0
   frame_width: 1280
   frame_height: 720
-  target_fps: 30
-  low_fps_fallback: 15
+  target_fps: 10
+  low_fps_fallback: 8
+  inference_scale: 0.4
+  instant_inference_interval_ms: 120
   zoom: 1.0
 
 execution:
@@ -44,25 +46,6 @@ recording:
 #   Closed_Fist, Open_Palm, Pointing_Up, Thumb_Up, Thumb_Down, Victory, ILoveYou
 # ═══════════════════════════════════════════════════════════════════════════
 gestures:
-  # ── SEQUENTIAL: Motion Gestures ──────────────────────────────────────────
-  - name: swipe_workspace_next
-    type: sequential
-    hand: right
-    condition:
-      sequence: ["swipe_right"]
-      window_frames: 15
-    action: "hyprctl dispatch workspace r+1"
-    cooldown_ms: 500
-
-  - name: swipe_workspace_prev
-    type: sequential
-    hand: right
-    condition:
-      sequence: ["swipe_left"]
-      window_frames: 15
-    action: "hyprctl dispatch workspace r-1"
-    cooldown_ms: 500
-
   # ── RIGHT HAND: Window Management & Shell ──────────────────────────────────
   - name: close_window
     type: instant

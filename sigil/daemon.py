@@ -16,7 +16,7 @@ import logging
 import signal
 import time
 
-from sigil.classifier import GestureClassifier
+from sigil.classifier import ClassificationResult, GestureClassifier
 from sigil.config import CONFIG_FILE, SigilConfig, load_config
 from sigil.executor import ActionMapper, Executor
 from sigil.overlay import Overlay
@@ -49,7 +49,12 @@ class Daemon:
 
         # Components
         self._tracker = Tracker(self._cfg.tracking)
-        self._classifier = GestureClassifier(self._cfg.gestures, self._cfg.execution)
+        self._classifier = GestureClassifier(
+            self._cfg.gestures,
+            self._cfg.execution,
+            custom_instant_model=self._cfg.tracking.instant_model_path,
+            instant_inference_interval_ms=self._cfg.tracking.instant_inference_interval_ms,
+        )
         self._mapper = ActionMapper(self._cfg)
         self._executor = Executor(self._cfg.execution)
         self._overlay = Overlay(
@@ -66,26 +71,29 @@ class Daemon:
         # Stats
         self._frames_processed: int = 0
         self._actions_fired: int = 0
-        
+
         # Hot-reload state
         self._config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else 0
+
+        # Threading safety
+        self._ui_update_pending = False
 
     def _check_config_reload(self) -> None:
         """Poll for config file changes and reload if necessary."""
         if not CONFIG_FILE.exists():
             return
-            
+
         mtime = CONFIG_FILE.stat().st_mtime
         if mtime > self._config_mtime:
             logger.info("Config file changed – hot-reloading …")
             self.reload_config()
             self._config_mtime = mtime
-            
+
             # Notify overlay
             wayland_ov = self._overlay.get_wayland_overlay()
             if wayland_ov:
                 from gi.repository import GLib
-                GLib.idle_add(wayland_ov.add_toast, "Config reloaded", 1.5, "blue")
+                GLib.idle_add(wayland_ov.add_toast, "Config reloaded", 1.5, "config")
 
     # ── Public API ───────────────────────────────────────────────────────────
     def run(self) -> None:
@@ -102,8 +110,9 @@ class Daemon:
     # ── GTK4 path ────────────────────────────────────────────────────────────
     def _run_gtk(self) -> None:
         """Run using GLib main loop via the GTK4 application."""
-        from sigil.ui.wayland_overlay import SigilGtkApp
         import threading
+
+        from sigil.ui.wayland_overlay import SigilGtkApp
 
         wayland_ov = self._overlay.get_wayland_overlay()
         if wayland_ov is None:
@@ -184,15 +193,23 @@ class Daemon:
                             # Schedule toast update on UI thread
                             wayland_ov = self._overlay.get_wayland_overlay()
                             if wayland_ov:
+                                display = result.gesture_name.replace('_', ' ').title()
                                 GLib.idle_add(
-                                    wayland_ov.add_toast, f"{result.gesture_name} → fired"
+                                    wayland_ov.add_toast, f"{display} → fired"
                                 )
 
                 # Update the Wayland overlay on the UI thread
                 wayland_ov = self._overlay.get_wayland_overlay()
-                if wayland_ov:
+                if wayland_ov and not self._ui_update_pending:
+                    self._ui_update_pending = True
+
+                    def _do_update(f, r, fps):
+                        wayland_ov.update(f, r, fps)
+                        self._ui_update_pending = False
+                        return False # Don't repeat
+
                     GLib.idle_add(
-                        wayland_ov.update,
+                        _do_update,
                         frame,
                         results,
                         self._tracker.fps,
@@ -200,8 +217,9 @@ class Daemon:
 
                 # Control FPS
                 elapsed = time.monotonic() - t0
-                wait = max(0.001, target_interval - elapsed)
-                time.sleep(wait)
+                wait = max(0.0, target_interval - elapsed)
+                if wait > 0:
+                    time.sleep(wait)
 
         except Exception:
             logger.exception("Fatal error in worker thread")
@@ -250,7 +268,8 @@ class Daemon:
                     # Show toast on the Wayland overlay
                     wayland_ov = self._overlay.get_wayland_overlay()
                     if wayland_ov:
-                        wayland_ov.add_toast(f"{result.gesture_name} → fired")
+                        display = result.gesture_name.replace('_', ' ').title()
+                        wayland_ov.add_toast(f"{display} → fired")
 
         # Update the Wayland overlay
         wayland_ov = self._overlay.get_wayland_overlay()
@@ -394,7 +413,7 @@ class Daemon:
         self._mapper.reload(self._cfg)
         self._classifier.reload(self._cfg.gestures, self._cfg.execution)
         logger.info("Config reloaded")
-        
+
         # Update overlay help hints
         wayland_ov = self._overlay.get_wayland_overlay()
         if wayland_ov:
@@ -406,11 +425,11 @@ class Daemon:
                 trigger = g.condition.get("pose") or g.condition.get("feature") or g.name
                 trigger = trigger.replace("_", " ").title()
                 if trigger in seen: continue
-                
+
                 # Simple effect description
                 effect = g.name.replace("_", " ").title()
                 hints.append((trigger, effect))
                 seen.add(trigger)
-            
+
             from gi.repository import GLib
             GLib.idle_add(wayland_ov.set_help_content, hints) # Show all gestures

@@ -1,13 +1,30 @@
 import pytest
 from sigil.classifier import GestureClassifier, ClassificationResult
 from sigil.config import GestureMapping, ExecutionConfig
-from sigil.tracker import FrameResult
+from sigil.tracker import BuiltinGesture, FrameResult, HandResult
 
 from unittest.mock import patch
-import pytest
-from sigil.classifier import GestureClassifier, ClassificationResult
-from sigil.config import GestureMapping, ExecutionConfig
-from sigil.tracker import FrameResult
+import numpy as np
+
+
+def _mk_frame_with_builtin(
+    gesture_name: str,
+    gesture_label: str,
+    gesture_score: float = 1.0,
+    handedness: str = "Right",
+    timestamp_ms: int = 1000,
+) -> FrameResult:
+    """Helper: create a FrameResult with a built-in gesture attached to the hand."""
+    landmarks = np.zeros((21, 3), dtype=np.float32)
+    landmarks[8] = [0.5, 0.5, 0.0]  # index finger tip
+    hand = HandResult(
+        handedness=handedness,
+        landmarks=landmarks,
+        score=0.9,
+        builtin_gesture=BuiltinGesture(label=gesture_label, score=gesture_score),
+    )
+    return FrameResult(timestamp_ms=timestamp_ms, hands=[hand])
+
 
 def test_continuous_gesture_bypasses_blanking():
     # Setup mappings
@@ -21,37 +38,30 @@ def test_continuous_gesture_bypasses_blanking():
             continuous=True,
         ),
     ]
-    
+
     # Execution config with long blanking
     exec_cfg = ExecutionConfig(confirm_frames=1, blanking_ms=1000)
-    
+
     classifier = GestureClassifier(mappings, execution=exec_cfg)
-    
-    # Trigger discrete action
+
+    # Trigger discrete action — use FrameResult with built-in gesture
+    frame1 = _mk_frame_with_builtin("discrete", "Closed_Fist", timestamp_ms=1000)
     with patch("sigil.classifier.monotonic_ms", return_value=1000):
-        classifier.instant.classify = lambda _: [
-            ClassificationResult(gesture_name="discrete", gesture_type="instant", confidence=1.0, raw_label="Closed_Fist")
-        ]
-        
-        res = classifier.classify(FrameResult(timestamp_ms=1000))
+        res = classifier.classify(frame1)
         assert len(res) == 1
         assert res[0].gesture_name == "discrete"
         assert classifier._blanking_until == 1000 + 1000
-    
-    # Next frame, blanking is active
+
+    # Next frame, blanking is active — discrete should be suppressed
+    frame2 = _mk_frame_with_builtin("discrete", "Closed_Fist", timestamp_ms=1100)
     with patch("sigil.classifier.monotonic_ms", return_value=1100):
-        # Discrete should be suppressed
-        classifier.instant.classify = lambda _: [
-            ClassificationResult(gesture_name="discrete", gesture_type="instant", confidence=1.0, raw_label="Closed_Fist")
-        ]
-        res2 = classifier.classify(FrameResult(timestamp_ms=1100))
+        res2 = classifier.classify(frame2)
         assert len(res2) == 0
-        
-        # Continuous should NOT be suppressed
-        classifier.instant.classify = lambda _: [
-            ClassificationResult(gesture_name="continuous", gesture_type="instant", confidence=1.0, raw_label="Pointing_Up")
-        ]
-        res3 = classifier.classify(FrameResult(timestamp_ms=1200))
+
+    # Continuous should NOT be suppressed during blanking
+    frame3 = _mk_frame_with_builtin("continuous", "Pointing_Up", timestamp_ms=1200)
+    with patch("sigil.classifier.monotonic_ms", return_value=1200):
+        res3 = classifier.classify(frame3)
         assert len(res3) == 1
         assert res3[0].gesture_name == "continuous"
 
@@ -70,33 +80,28 @@ def test_per_gesture_blanking_override():
     exec_cfg = ExecutionConfig(confirm_frames=3, blanking_ms=1500, confidence_threshold=0.75)
     classifier = GestureClassifier(mappings, execution=exec_cfg)
 
+    frame = _mk_frame_with_builtin("tap", "Thumb_Index_Pinch", timestamp_ms=5000)
     with patch("sigil.classifier.monotonic_ms", return_value=5000):
-        classifier.instant.classify = lambda _: [
-            ClassificationResult(gesture_name="tap", gesture_type="instant", confidence=1.0, raw_label="Thumb_Index_Pinch")
-        ]
-        res = classifier.classify(FrameResult(timestamp_ms=5000))
+        res = classifier.classify(frame)
         assert len(res) == 1
         assert res[0].gesture_name == "tap"
         # Per-gesture blanking_ms=0 should win
         assert classifier._blanking_until == 5000
+
 
 def test_gradual_pointer_position():
     mappings = [
         GestureMapping(name="cursor", type="gradual", hand="right", condition={"feature": "pointer_position"}, continuous=True)
     ]
     classifier = GestureClassifier(mappings)
-    
-    # Mock HandResult with landmarks
-    import numpy as np
-    from sigil.tracker import HandResult, FrameResult
-    
+
     # Landmark 8 is index finger tip
     landmarks = np.zeros((21, 3))
     landmarks[8] = [0.1, 0.2, 0.3]
-    
+
     hand = HandResult(handedness="Right", landmarks=landmarks, score=0.9)
     frame = FrameResult(timestamp_ms=1000, hands=[hand])
-    
+
     res = classifier.classify(frame)
     assert len(res) == 1
     assert res[0].gesture_name == "cursor"
@@ -104,18 +109,13 @@ def test_gradual_pointer_position():
 
 
 def test_pinch_ratio_hysteresis_press_edge():
-    import numpy as np
 
     def mk_hand(pinch_ratio_value: float) -> "HandResult":
-        # Build landmarks so pinch_ratio == pinch distance (base is forced to 1.0).
-        # pinch_ratio = dist(lm[4], lm[8]) / dist(lm[0], lm[5])
         landmarks = np.zeros((21, 3), dtype=np.float32)
         landmarks[0] = [0.0, 0.0, 0.0]  # wrist
         landmarks[5] = [1.0, 0.0, 0.0]  # index_mcp (base scale)
         landmarks[8] = [0.0, 0.0, 0.0]  # index_tip
         landmarks[4] = [pinch_ratio_value, 0.0, 0.0]  # thumb_tip
-        from sigil.tracker import HandResult
-
         return HandResult(handedness="Right", landmarks=landmarks, score=0.9)
 
     mappings = [
@@ -160,9 +160,6 @@ def test_pinch_ratio_hysteresis_press_edge():
 
 
 def test_tuple_delta_gating_min_delta_dy():
-    import numpy as np
-    from sigil.tracker import HandResult, FrameResult
-
     # For finger_deltas, palm_center uses wrist(0) and middle_mcp(9).
     def mk_hand(palm_y: float) -> HandResult:
         landmarks = np.zeros((21, 3), dtype=np.float32)
@@ -196,3 +193,51 @@ def test_tuple_delta_gating_min_delta_dy():
     # No further movement => dy=0 => should not trigger
     res3 = classifier.classify(FrameResult(timestamp_ms=1066, hands=[mk_hand(0.10)]))
     assert res3 == []
+
+
+def test_builtin_gesture_from_frame_result():
+    """Test the new single-pass architecture: InstantClassifier reads from FrameResult."""
+    mappings = [
+        GestureMapping(
+            name="fist_close",
+            type="instant",
+            hand="right",
+            condition={"pose": "Closed_Fist"},
+            confirm_frames=1,
+        )
+    ]
+    exec_cfg = ExecutionConfig(confirm_frames=1, blanking_ms=0)
+    classifier = GestureClassifier(mappings, execution=exec_cfg)
+
+    # Create a frame with built-in gesture attached
+    frame = _mk_frame_with_builtin("fist_close", "Closed_Fist", gesture_score=0.95)
+
+    with patch("sigil.classifier.monotonic_ms", return_value=1000):
+        results = classifier.classify(frame)
+
+    assert len(results) == 1
+    assert results[0].gesture_name == "fist_close"
+    assert results[0].source == "builtin"
+    assert results[0].confidence == 0.95
+
+
+def test_no_builtin_gesture_returns_empty():
+    """A hand without a built-in gesture should produce no instant results."""
+    mappings = [
+        GestureMapping(name="fist", type="instant", hand="right", condition={"pose": "Closed_Fist"})
+    ]
+    classifier = GestureClassifier(mappings, execution=ExecutionConfig(confirm_frames=1))
+
+    # Hand with no builtin_gesture
+    hand = HandResult(
+        handedness="Right",
+        landmarks=np.zeros((21, 3), dtype=np.float32),
+        score=0.9,
+        builtin_gesture=None,
+    )
+    frame = FrameResult(timestamp_ms=1000, hands=[hand])
+
+    with patch("sigil.classifier.monotonic_ms", return_value=1000):
+        results = classifier.classify(frame)
+
+    assert results == []

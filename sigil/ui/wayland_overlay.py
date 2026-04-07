@@ -27,8 +27,10 @@ import numpy as np
 from sigil.ui import HAS_CAIRO, HAS_GTK4, HAS_LAYER_SHELL
 from sigil.ui.drawing import (
     COLORS,
+    GESTURE_EMOJIS,
     draw_hand,
     draw_rounded_rect,
+    draw_tracking_quality_bar,
 )
 
 if TYPE_CHECKING:
@@ -65,17 +67,28 @@ _ANCHOR_MAP: dict[str, list[str]] = {
     "top-left": ["TOP", "LEFT"],
 }
 
+# ── Tracking state enum ─────────────────────────────────────────────────────
+TRACKING_IDLE = "idle"
+TRACKING_ACTIVE = "tracking"
+TRACKING_DETECTED = "detected"
+TRACKING_FIRED = "fired"
+
+# ── Toast categories ─────────────────────────────────────────────────────────
+TOAST_ACTION = "action"    # ⚡ gesture fired
+TOAST_CONFIG = "config"    # ⚙️ config reloaded
+TOAST_WARNING = "warning"  # ⚠️ warning/error
+
 
 # ── Toast entry ──────────────────────────────────────────────────────────────
 class _Toast:
-    """A transient status message."""
+    """A transient status message with category."""
 
-    __slots__ = ("text", "expire_time", "color")
+    __slots__ = ("text", "expire_time", "category")
 
-    def __init__(self, text: str, duration_s: float = 2.0, color: str = "green") -> None:
+    def __init__(self, text: str, duration_s: float = 2.0, category: str = TOAST_ACTION) -> None:
         self.text = text
         self.expire_time = time.monotonic() + duration_s
-        self.color = color
+        self.category = category
 
     @property
     def alive(self) -> bool:
@@ -87,6 +100,15 @@ class _Toast:
         if remaining > 0.5:
             return 1.0
         return max(0.0, remaining / 0.5)
+
+    @property
+    def prefix(self) -> str:
+        """Emoji prefix based on category."""
+        return {
+            TOAST_ACTION: "⚡",
+            TOAST_CONFIG: "⚙️",
+            TOAST_WARNING: "⚠️",
+        }.get(self.category, "•")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -141,6 +163,9 @@ class WaylandOverlay:
         self._show_help: bool = True
         self._activity_log: deque[str] = deque(maxlen=3)  # Last 3 actions
         self._trigger_flash: float = 0.0  # Landmark pulse on trigger
+        self._tracking_state: str = TRACKING_IDLE
+        self._current_confidence: float = 0.0
+        self._num_hands_visible: int = 0
 
         # Cairo surface for camera (reused across frames)
         self._cam_surface: Any = None
@@ -152,19 +177,20 @@ class WaylandOverlay:
         self._window: Gtk.Window | None = None
         self._camera_area: Gtk.DrawingArea | None = None
         self._lbl_fps: Gtk.Label | None = None
-        self._lbl_hands: Gtk.Label | None = None
-        self._lbl_fingers: Gtk.Label | None = None
         self._lbl_gesture: Gtk.Label | None = None
-        self._lbl_action: Gtk.Label | None = None
+        self._activity_label: Gtk.Label | None = None
         self._recording_box: Gtk.Box | None = None
         self._lbl_rec: Gtk.Label | None = None
         self._lbl_rec_count: Gtk.Label | None = None
         self._progress_bar: Gtk.ProgressBar | None = None
         self._toast_box: Gtk.Box | None = None
         self._mode_badge: Gtk.Label | None = None
-        self._help_box: Gtk.Box | None = None
+        self._tracking_dot: Gtk.Label | None = None
+        self._confidence_bar: Gtk.ProgressBar | None = None
         self._help_window: Gtk.Window | None = None
-        self._help_grid: Gtk.Grid | None = None
+        self._help_content_box: Gtk.Box | None = None
+        # Performance throttle: only refresh camera texture every Nth frame when hands are visible.
+        self._cam_surface_stride_with_hands: int = 2
 
     # ── Properties ───────────────────────────────────────────────────────────
     @property
@@ -187,9 +213,9 @@ class WaylandOverlay:
         """Update recording progress bar."""
         self._recording_progress = current / max(total, 1)
 
-    def add_toast(self, text: str, duration: float = 2.0, color: str = "green") -> None:
+    def add_toast(self, text: str, duration: float = 2.0, category: str = TOAST_ACTION) -> None:
         """Show a transient notification in the overlay."""
-        self._toasts.append(_Toast(text, duration, color))
+        self._toasts.append(_Toast(text, duration, category))
         # Keep at most 3
         if len(self._toasts) > 3:
             self._toasts = self._toasts[-3:]
@@ -198,48 +224,81 @@ class WaylandOverlay:
         """Toggle help section visibility. Returns new state."""
         self._show_help = not self._show_help
         logger.info("Toggling help window visibility → %s", self._show_help)
-        
+
         if self._help_window:
             # Must run on UI thread
-            def _apply():
+            def _apply() -> None:
                 if self._show_help:
-                    self._help_window.present()
+                    self._help_window.present()  # type: ignore[union-attr]
                 else:
-                    self._help_window.set_visible(False)
+                    self._help_window.set_visible(False)  # type: ignore[union-attr]
             GLib.idle_add(_apply)
         return self._show_help
 
     def set_help_content(self, hints: list[tuple[str, str]]) -> None:
-        """Update the gesture hint list dynamically."""
-        if not self._help_grid:
+        """Update the gesture hint list dynamically.
+
+        Hints are (trigger, effect) pairs. They are grouped by hand
+        (inferred from the gesture config) and displayed with emojis.
+        """
+        if not self._help_content_box:
             self._pending_help_hints = hints
             return
-            
+
         if hasattr(self, "_pending_help_hints"):
             del self._pending_help_hints
-            
+
         # Clear existing
-        child = self._help_grid.get_first_child()
+        child = self._help_content_box.get_first_child()
         while child:
             next_child = child.get_next_sibling()
-            self._help_grid.remove(child)
+            self._help_content_box.remove(child)
             child = next_child
-            
-        # Add new hints in 2 columns
-        for i, (trigger, effect) in enumerate(hints):
-            col = (i % 2) * 2 # 0 or 2
-            row = i // 2
-            
+
+        if not hints:
+            empty = Gtk.Label(label="No gestures configured")
+            empty.add_css_class("sigil-gesture-none")
+            self._help_content_box.append(empty)
+            return
+
+        # Build rows for each hint
+        for trigger, effect in hints:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row.add_css_class("sigil-help-row-box")
+
+            # Emoji
+            emoji_key = trigger.replace(" ", "_")
+            emoji = GESTURE_EMOJIS.get(emoji_key, "•")
+            emoji_lbl = Gtk.Label(label=emoji)
+            emoji_lbl.add_css_class("sigil-help-emoji")
+            emoji_lbl.set_halign(Gtk.Align.CENTER)
+            row.append(emoji_lbl)
+
+            # Trigger name
             t_lbl = Gtk.Label(label=trigger)
             t_lbl.add_css_class("sigil-help-trigger")
             t_lbl.set_halign(Gtk.Align.START)
-            
+            row.append(t_lbl)
+
+            # Arrow
+            arrow = Gtk.Label(label="→")
+            arrow.add_css_class("sigil-help-arrow")
+            row.append(arrow)
+
+            # Effect description
             e_lbl = Gtk.Label(label=effect)
             e_lbl.add_css_class("sigil-help-effect")
             e_lbl.set_halign(Gtk.Align.START)
-            
-            self._help_grid.attach(t_lbl, col, row, 1, 1)
-            self._help_grid.attach(e_lbl, col + 1, row, 1, 1)
+            e_lbl.set_hexpand(True)
+            row.append(e_lbl)
+
+            self._help_content_box.append(row)
+
+        # Footer
+        footer = Gtk.Label(label=f"{len(hints)} gestures active")
+        footer.add_css_class("sigil-help-footer")
+        footer.set_halign(Gtk.Align.CENTER)
+        self._help_content_box.append(footer)
 
     # ── GTK Application ──────────────────────────────────────────────────────
     def create_window(self, app: Gtk.Application) -> Gtk.Window:
@@ -248,10 +307,10 @@ class WaylandOverlay:
         self._window = Gtk.Window(application=app)
         self._window.set_title("Sigil")
         # FIXED WIDTH: Prevents window jumping
-        self._window.set_default_size(self._cam_w + 32, -1)
+        self._window.set_default_size(self._cam_w + 40, -1)
         self._window.set_resizable(False)
         self._window.set_decorated(False)
-        logger.debug("Created GTK window with fixed width %d", self._cam_w + 32)
+        logger.debug("Created GTK window with fixed width %d", self._cam_w + 40)
 
         # ── Layer-shell setup ────────────────────────────────────────────────
         self._layer_shell_active = False
@@ -262,7 +321,6 @@ class WaylandOverlay:
                 if Gtk4LayerShell.is_layer_window(self._window):
                     Gtk4LayerShell.set_layer(self._window, Gtk4LayerShell.Layer.OVERLAY)
                     # Use "gtk4-layer-shell" namespace to match Hyprland rules
-                    # This ensures proper blur and alpha handling
                     Gtk4LayerShell.set_namespace(self._window, "gtk4-layer-shell")
                     Gtk4LayerShell.set_exclusive_zone(self._window, -1)
 
@@ -291,10 +349,8 @@ class WaylandOverlay:
                 )
 
         if not self._layer_shell_active:
-            # Regular GTK4 window fallback – position near screen corner
+            # Regular GTK4 window fallback
             self._window.set_decorated(False)
-            # GTK4 doesn't have set_keep_above, but we can use set_keep_above
-            # via the native Wayland interface if needed
             logger.warning("Using regular GTK4 window (not layer-shell)")
             logger.warning(
                 "Note: Window may appear behind other applications."
@@ -348,9 +404,9 @@ class WaylandOverlay:
         assert self._window is not None
 
         # Root box
-        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         panel.add_css_class("sigil-panel")
-        panel.set_size_request(self._cam_w + 24, -1)
+        panel.set_size_request(self._cam_w + 32, -1)
         self._window.set_child(panel)
 
         # ── Camera preview ───────────────────────────────────────────────────
@@ -362,39 +418,58 @@ class WaylandOverlay:
             self._camera_area.set_draw_func(self._on_camera_draw)
             panel.append(self._camera_area)
 
-        # ── Status Header ────────────────────────────────────────────────────
+        # ── Status Header: Badge + Tracking dot + FPS ────────────────────────
         header = Gtk.CenterBox()
         header.add_css_class("sigil-header")
         panel.append(header)
 
+        # Left side: Mode badge + tracking dot
+        header_left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
         self._mode_badge = Gtk.Label(label="SIGIL")
         self._mode_badge.add_css_class("sigil-mode-badge")
-        header.set_start_widget(self._mode_badge)
+        header_left.append(self._mode_badge)
 
+        self._tracking_dot = Gtk.Label(label="●")
+        self._tracking_dot.add_css_class("sigil-tracking-dot-idle")
+        header_left.append(self._tracking_dot)
+
+        header.set_start_widget(header_left)
+
+        # Right side: FPS
         self._lbl_fps = Gtk.Label(label="0 FPS")
         self._lbl_fps.add_css_class("sigil-fps")
         header.set_end_widget(self._lbl_fps)
 
         # ── Info Section (Fixed Height to prevent jumping) ──────────────────
         info_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        info_stack.set_size_request(-1, 64) 
+        info_stack.add_css_class("sigil-info-stack")
         panel.append(info_stack)
 
-        self._lbl_gesture = Gtk.Label(label="Ready")
+        # Gesture label
+        self._lbl_gesture = Gtk.Label(label="Idle")
         self._lbl_gesture.add_css_class("sigil-gesture-none")
         self._lbl_gesture.set_halign(Gtk.Align.START)
         self._lbl_gesture.set_ellipsize(Pango.EllipsizeMode.END)
         info_stack.append(self._lbl_gesture)
 
-        self._activity_label = Gtk.Label(label="Waiting for input...")
+        # Confidence bar
+        self._confidence_bar = Gtk.ProgressBar()
+        self._confidence_bar.set_fraction(0.0)
+        self._confidence_bar.add_css_class("sigil-confidence-trough")
+        self._confidence_bar.set_visible(False)
+        info_stack.append(self._confidence_bar)
+
+        # Activity log (mini-terminal)
+        self._activity_label = Gtk.Label(label="System ready")
         self._activity_label.add_css_class("sigil-action")
         self._activity_label.set_halign(Gtk.Align.START)
         self._activity_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._activity_label.set_lines(2) # Show last 2 lines
+        self._activity_label.set_lines(2)
         info_stack.append(self._activity_label)
 
         # ── Recording section (hidden by default) ────────────────────────────
-        self._recording_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._recording_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self._recording_box.set_visible(False)
         panel.append(self._recording_box)
 
@@ -402,10 +477,10 @@ class WaylandOverlay:
         rec_sep.add_css_class("sigil-separator")
         self._recording_box.append(rec_sep)
 
-        rec_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        rec_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._recording_box.append(rec_header)
 
-        self._lbl_rec = Gtk.Label(label="● REC")
+        self._lbl_rec = Gtk.Label(label="🔴 REC")
         self._lbl_rec.add_css_class("sigil-recording-label")
         rec_header.append(self._lbl_rec)
 
@@ -425,13 +500,13 @@ class WaylandOverlay:
         panel.append(self._toast_box)
 
     def _build_help_window(self) -> None:
-        """Create a separate, toggleable window for all gesture hints."""
+        """Create a separate, toggleable window for gesture reference."""
         if self._app is None:
             return
-            
+
         self._help_window = Gtk.Window(application=self._app)
         self._help_window.set_title("Sigil Help")
-        self._help_window.set_default_size(360, -1)
+        self._help_window.set_default_size(380, -1)
         self._help_window.set_decorated(False)
         self._help_window.add_css_class("sigil-help-window")
 
@@ -440,28 +515,26 @@ class WaylandOverlay:
                 Gtk4LayerShell.init_for_window(self._help_window)
                 Gtk4LayerShell.set_layer(self._help_window, Gtk4LayerShell.Layer.OVERLAY)
                 Gtk4LayerShell.set_namespace(self._help_window, "sigil-help")
-                
+
                 # Keyboard interactivity: NONE means click-through
-                # CRITICAL: Prevents 'killactive' from hitting this window
                 Gtk4LayerShell.set_keyboard_mode(self._help_window, Gtk4LayerShell.KeyboardMode.NONE)
 
-                # Position it near the main overlay (top-right of bottom-right)
+                # Position it above the main overlay
                 anchors = _ANCHOR_MAP.get(self._position, ["BOTTOM", "RIGHT"])
                 for edge_name in anchors:
                     edge = getattr(Gtk4LayerShell.Edge, edge_name)
                     Gtk4LayerShell.set_anchor(self._help_window, edge, True)
-                    
+
                     margin = self._margin
                     if "BOTTOM" in edge_name:
-                        # Increased from 220 to 320 to avoid overlap with growing toasts
-                        margin += 320 
+                        margin += 340  # Offset to avoid overlap with main overlay
                     Gtk4LayerShell.set_margin(self._help_window, edge, margin)
-                
+
                 logger.info("Help window initialized with layer-shell")
             except Exception as exc:
                 logger.warning("Help window layer-shell setup failed: %s", exc)
 
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root.add_css_class("sigil-help-panel")
         self._help_window.set_child(root)
 
@@ -469,10 +542,9 @@ class WaylandOverlay:
         title.add_css_class("sigil-help-window-title")
         root.append(title)
 
-        self._help_grid = Gtk.Grid()
-        self._help_grid.set_column_spacing(20)
-        self._help_grid.set_row_spacing(6)
-        root.append(self._help_grid)
+        # Scrollable content area
+        self._help_content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        root.append(self._help_content_box)
 
         # Initially visible if state is True
         if self._show_help:
@@ -497,19 +569,21 @@ class WaylandOverlay:
         # Background if no frame
         if fr is None or fr.frame is None:
             cr.set_source_rgba(0.067, 0.067, 0.106, 0.95)
-            draw_rounded_rect(cr, 0, 0, width, height, 12)
+            draw_rounded_rect(cr, 0, 0, width, height, 14)
             cr.fill()
-            # "No camera" text
-            cr.set_source_rgba(*COLORS["subtext0"][:3], 0.6)
+
+            # "No camera" text with icon
+            cr.set_source_rgba(*COLORS["subtext0"][:3], 0.4)
             cr.select_font_face("Sans", 0, 0)
             cr.set_font_size(13)
-            ext = cr.text_extents("No camera feed")
+            text = "📷  Waiting for camera…"
+            ext = cr.text_extents(text)
             cr.move_to((width - ext.width) / 2, (height + ext.height) / 2)
-            cr.show_text("No camera feed")
+            cr.show_text(text)
             return
 
         # Clip to rounded rect
-        draw_rounded_rect(cr, 0, 0, width, height, 12)
+        draw_rounded_rect(cr, 0, 0, width, height, 14)
         cr.clip()
 
         # Draw camera feed
@@ -517,41 +591,73 @@ class WaylandOverlay:
             cr.set_source_surface(self._cam_surface, 0, 0)
             cr.paint()
 
-        # ── Dim overlay for better landmark visibility ───────────────────────
-        cr.set_source_rgba(0, 0, 0, 0.15)
+        # ── Subtle vignette overlay for depth ────────────────────────────────
+        cr.set_source_rgba(0, 0, 0, 0.12)
         cr.rectangle(0, 0, width, height)
         cr.fill()
 
         # ── Draw hand landmarks ──────────────────────────────────────────────
-        for hand in fr.hands:
-            # TRIGGER PULSE: Glow hand landmarks on successful fire
-            if self._trigger_flash > 0:
-                glow_alpha = self._trigger_flash * 0.6
-                cr.set_source_rgba(0.5, 1.0, 0.5, glow_alpha)
-                # Draw a larger blurred shadow/glow behind hand
-                for lm in hand.landmarks:
-                    cr.arc(lm[0]*width, lm[1]*height, 6, 0, 2*math.pi)
-                    cr.fill()
+        draw_landmarks_this_frame = True
+        if fr.hands and fr.frame_id % 2 != 0:
+            draw_landmarks_this_frame = False
 
-            draw_hand(cr, hand, width, height)
-            
-            # PROXIMITY WARNING: If any landmark is too close to edge
-            # (indicating hand might be getting cut off)
-            lm = hand.landmarks
-            if (lm[:, 0].min() < 0.05 or lm[:, 0].max() > 0.95 or 
-                lm[:, 1].min() < 0.05 or lm[:, 1].max() > 0.95):
-                cr.set_source_rgba(1.0, 0.3, 0.3, 0.4)
-                cr.set_line_width(2)
-                draw_rounded_rect(cr, 4, 4, width - 8, height - 8, 10)
-                cr.stroke()
+        if draw_landmarks_this_frame:
+            for hand in fr.hands:
+                # TRIGGER PULSE: Glow hand landmarks on successful fire
+                if self._trigger_flash > 0:
+                    glow_alpha = self._trigger_flash * 0.5
+                    cr.set_source_rgba(0.5, 1.0, 0.5, glow_alpha)
+                    for lm_pt in hand.landmarks:
+                        cr.arc(lm_pt[0] * width, lm_pt[1] * height, 5, 0, 2 * math.pi)
+                        cr.fill()
+
+                draw_hand(
+                    cr,
+                    hand,
+                    width,
+                    height,
+                    confidence=hand.score,
+                    glow=False,
+                    fast_mode=True,
+                )
+
+                # PROXIMITY WARNING: If any landmark is too close to edge
+                lm = hand.landmarks
+                if (lm[:, 0].min() < 0.05 or lm[:, 0].max() > 0.95 or
+                    lm[:, 1].min() < 0.05 or lm[:, 1].max() > 0.95):
+                    cr.set_source_rgba(1.0, 0.3, 0.3, 0.35)
+                    cr.set_line_width(2)
+                    draw_rounded_rect(cr, 3, 3, width - 6, height - 6, 12)
+                    cr.stroke()
 
         # ── Recording border pulse ───────────────────────────────────────────
         if self._is_recording:
             pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 4)
-            cr.set_source_rgba(0.953, 0.545, 0.659, 0.3 + 0.4 * pulse)
+            cr.set_source_rgba(0.953, 0.545, 0.659, 0.25 + 0.4 * pulse)
             cr.set_line_width(3)
-            draw_rounded_rect(cr, 1.5, 1.5, width - 3, height - 3, 11)
+            draw_rounded_rect(cr, 1.5, 1.5, width - 3, height - 3, 13)
             cr.stroke()
+
+        # ── Tracking quality bar at bottom ───────────────────────────────────
+        bar_margin = 8
+        draw_tracking_quality_bar(
+            cr,
+            bar_margin,
+            height - 8,
+            width - bar_margin * 2,
+            len(fr.hands),
+            max_hands=2,
+        )
+
+        # ── "No hands detected" indicator ────────────────────────────────────
+        if not fr.hands:
+            cr.set_source_rgba(*COLORS["subtext0"][:3], 0.3)
+            cr.select_font_face("Sans", 0, 0)
+            cr.set_font_size(11)
+            text = "No hands in frame"
+            ext = cr.text_extents(text)
+            cr.move_to((width - ext.width) / 2, height - 18)
+            cr.show_text(text)
 
     def _update_cam_surface(self, frame: np.ndarray, target_w: int, target_h: int) -> None:
         """Convert an OpenCV BGR frame into a Cairo ImageSurface.
@@ -593,7 +699,7 @@ class WaylandOverlay:
     ) -> None:
         """Update overlay state and queue a redraw.
 
-        This is the main entry point called ~30× / second from the daemon loop.
+        This is the main entry point called from the daemon loop.
         """
         if not self._enabled or self._window is None:
             return
@@ -602,74 +708,133 @@ class WaylandOverlay:
         self._classifications = classifications or []
         self._fps = fps
 
+        # ── Determine tracking state ─────────────────────────────────────────
+        if frame_result and frame_result.hands:
+            self._num_hands_visible = len(frame_result.hands)
+            if self._classifications:
+                if self._trigger_flash > 0.8:
+                    self._tracking_state = TRACKING_FIRED
+                else:
+                    self._tracking_state = TRACKING_DETECTED
+            else:
+                self._tracking_state = TRACKING_ACTIVE
+        else:
+            self._num_hands_visible = 0
+            self._tracking_state = TRACKING_IDLE
+
         # ── Update camera surface if frame present ───────────────────────────
         if self._show_camera and frame_result and frame_result.frame is not None:
-            # Use DrawingArea size if available, else configured size
+            should_refresh_surface = True
+            if (
+                frame_result.hands
+                and self._cam_surface_stride_with_hands > 1
+                and frame_result.frame_id % self._cam_surface_stride_with_hands != 0
+            ):
+                should_refresh_surface = False
+
             w = self._camera_area.get_width() if self._camera_area else self._cam_w
             h = self._camera_area.get_height() if self._camera_area else self._cam_h
             if w <= 1:
                 w = self._cam_w
             if h <= 1:
                 h = self._cam_h
-            self._update_cam_surface(frame_result.frame, w, h)
+            if should_refresh_surface:
+                self._update_cam_surface(frame_result.frame, w, h)
 
         # ── Update labels ────────────────────────────────────────────────────
         if self._lbl_fps:
             self._lbl_fps.set_text(f"{fps:.0f} FPS")
 
-        # Gesture label
+        # Tracking dot: reflects current state
+        if self._tracking_dot:
+            # Remove all state classes
+            for state in ("idle", "tracking", "detected", "fired"):
+                self._tracking_dot.remove_css_class(f"sigil-tracking-dot-{state}")
+            self._tracking_dot.add_css_class(f"sigil-tracking-dot-{self._tracking_state}")
+
+        # Mode badge: reflects current mode
+        if self._mode_badge:
+            if self._is_recording:
+                self._mode_badge.set_text("REC")
+                self._mode_badge.remove_css_class("sigil-mode-badge")
+                self._mode_badge.remove_css_class("sigil-mode-badge-tracking")
+                self._mode_badge.add_css_class("sigil-mode-badge-recording")
+            elif self._tracking_state in (TRACKING_ACTIVE, TRACKING_DETECTED, TRACKING_FIRED):
+                self._mode_badge.set_text("SIGIL")
+                self._mode_badge.remove_css_class("sigil-mode-badge")
+                self._mode_badge.remove_css_class("sigil-mode-badge-recording")
+                self._mode_badge.add_css_class("sigil-mode-badge-tracking")
+            else:
+                self._mode_badge.set_text("SIGIL")
+                self._mode_badge.remove_css_class("sigil-mode-badge-recording")
+                self._mode_badge.remove_css_class("sigil-mode-badge-tracking")
+                self._mode_badge.add_css_class("sigil-mode-badge")
+
+        # Gesture label + confidence
         if self._lbl_gesture:
             if self._classifications:
                 top = self._classifications[0]
-                self._lbl_gesture.set_text(f"✋ {top.gesture_name.replace('_', ' ').title()}")
+                self._current_confidence = top.confidence
+                # Look up emoji for the gesture
+                pose = top.raw_label or top.gesture_name
+                emoji = GESTURE_EMOJIS.get(pose, "✋")
+                display_name = top.gesture_name.replace("_", " ").title()
+                self._lbl_gesture.set_text(f"{emoji}  {display_name}")
                 self._lbl_gesture.remove_css_class("sigil-gesture-none")
                 self._lbl_gesture.add_css_class("sigil-gesture")
-                
+
+                # Show confidence bar
+                if self._confidence_bar:
+                    self._confidence_bar.set_visible(True)
+                    self._confidence_bar.set_fraction(min(1.0, top.confidence))
+
                 # Update Activity Log
-                msg = f"Fired: {top.gesture_name.replace('_', ' ')}"
+                msg = f"→ {display_name}"
                 if not self._activity_log or self._activity_log[-1] != msg:
                     self._activity_log.append(msg)
-                    self._trigger_flash = 1.0 # Start pulse
+                    self._trigger_flash = 1.0  # Start pulse
             else:
-                self._lbl_gesture.set_text("Waiting...")
+                self._current_confidence = 0.0
+                if self._num_hands_visible > 0:
+                    self._lbl_gesture.set_text("Scanning…")
+                else:
+                    self._lbl_gesture.set_text("Idle")
                 self._lbl_gesture.remove_css_class("sigil-gesture")
                 self._lbl_gesture.add_css_class("sigil-gesture-none")
+
+                # Hide confidence bar when no gesture
+                if self._confidence_bar:
+                    self._confidence_bar.set_visible(False)
 
         # Activity Log (consolidated label)
         if self._activity_label:
             if self._activity_log:
                 lines = list(self._activity_log)
-                # Show last 2 lines, dim previous
                 self._activity_label.set_text("\n".join(lines))
             else:
-                self._activity_label.set_text("System active")
-        
-        # Decay trigger flash
+                self._activity_label.set_text("System ready")
+
+        # ── Decay trigger flash (ease-out curve) ─────────────────────────────
         if self._trigger_flash > 0:
-            self._trigger_flash = max(0.0, self._trigger_flash - 0.05)
+            # Ease-out: faster decay at start, slower near 0
+            self._trigger_flash = max(0.0, self._trigger_flash * 0.92)
+            if self._trigger_flash < 0.01:
+                self._trigger_flash = 0.0
 
         # Recording section
         if self._recording_box:
             self._recording_box.set_visible(self._is_recording)
         if self._is_recording and self._recording_status:
             if self._lbl_rec:
-                self._lbl_rec.set_text("● REC")
+                self._lbl_rec.set_text("🔴 REC")
             if self._lbl_rec_count:
                 self._lbl_rec_count.set_text(self._recording_status)
             if self._progress_bar:
                 self._progress_bar.set_fraction(self._recording_progress)
-            if self._mode_badge:
-                self._mode_badge.set_text("REC")
-                self._mode_badge.remove_css_class("sigil-mode-badge")
-                self._mode_badge.add_css_class("sigil-mode-badge-recording")
             if self._camera_area:
                 self._camera_area.remove_css_class("sigil-camera")
                 self._camera_area.add_css_class("sigil-camera-recording")
         else:
-            if self._mode_badge:
-                self._mode_badge.set_text("SIGIL")
-                self._mode_badge.remove_css_class("sigil-mode-badge-recording")
-                self._mode_badge.add_css_class("sigil-mode-badge")
             if self._camera_area:
                 self._camera_area.remove_css_class("sigil-camera-recording")
                 self._camera_area.add_css_class("sigil-camera")
@@ -698,13 +863,28 @@ class WaylandOverlay:
 
         # Add live toasts
         for toast in self._toasts:
-            lbl = Gtk.Label(label=f"⚡ {toast.text}")
-            lbl.add_css_class("sigil-toast-text")
+            lbl = Gtk.Label(label=f"{toast.prefix} {toast.text}")
+
+            # Apply category-specific text style
+            if toast.category == TOAST_CONFIG:
+                lbl.add_css_class("sigil-toast-text-config")
+            elif toast.category == TOAST_WARNING:
+                lbl.add_css_class("sigil-toast-text-warning")
+            else:
+                lbl.add_css_class("sigil-toast-text")
+
             lbl.set_opacity(toast.alpha)
             lbl.set_halign(Gtk.Align.START)
 
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            box.add_css_class("sigil-toast")
+            # Apply category-specific box style
+            if toast.category == TOAST_CONFIG:
+                box.add_css_class("sigil-toast-config")
+            elif toast.category == TOAST_WARNING:
+                box.add_css_class("sigil-toast-warning")
+            else:
+                box.add_css_class("sigil-toast-action")
+
             box.set_opacity(toast.alpha)
             box.append(lbl)
             self._toast_box.append(box)
@@ -731,7 +911,7 @@ class SigilGtkApp(Gtk.Application):
     ----------
     overlay : WaylandOverlay
     frame_callback : callable
-        Called every ~33 ms (30 fps). Should read tracker, classify, execute,
+        Called every tick. Should read tracker, classify, execute,
         and call ``overlay.update()``. Return ``True`` to keep running.
     shutdown_callback : callable
         Called when the application is closing.
@@ -742,7 +922,7 @@ class SigilGtkApp(Gtk.Application):
         overlay: WaylandOverlay,
         frame_callback: Any,
         shutdown_callback: Any,
-        target_fps: int = 30,
+        target_fps: int = 15,
     ) -> None:
         super().__init__(application_id="dev.sigil.overlay")
         self._overlay = overlay
@@ -754,7 +934,7 @@ class SigilGtkApp(Gtk.Application):
     def do_activate(self) -> None:
         """Create window and start frame timer if callback provided."""
         self._overlay.create_window(self)
-        
+
         # Start the frame processing timer if we have a callback (legacy/sync mode)
         if self._frame_cb:
             interval_ms = max(1, 1000 // self._target_fps)

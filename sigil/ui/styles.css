@@ -1,174 +1,369 @@
-/* ── Sigil GTK4 Overlay Stylesheet ─────────────────────────────────
- *
- * Catppuccin Mocha-inspired theme for Hyprland integration.
- * Applied to the Wayland layer-shell overlay window.
- * ──────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Sigil GTK4 Overlay – Design System
+ *  Catppuccin Mocha · Designed for Hyprland layer-shell compositing
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Base window ────────────────────────────────────────────────────── */
+/* ── Base window (transparent for layer-shell compositing) ──────────────── */
 .sigil-window {
     background-color: transparent;
 }
 
-/* ── Main overlay panel ─────────────────────────────────────────────── */
+/* ── Main overlay panel ─────────────────────────────────────────────────── */
 .sigil-panel {
-    background-color: rgba(30, 30, 46, 0.88);
-    border-radius: 16px;
-    border: 1px solid rgba(137, 180, 250, 0.20);
-    padding: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    background: linear-gradient(
+        180deg,
+        rgba(30, 30, 46, 0.92) 0%,
+        rgba(24, 24, 37, 0.94) 100%
+    );
+    border-radius: 20px;
+    border: 1px solid rgba(137, 180, 250, 0.15);
+    padding: 16px;
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(205, 214, 244, 0.06);
 }
 
 .sigil-panel:backdrop {
-    background-color: rgba(30, 30, 46, 0.75);
-    border: 1px solid rgba(137, 180, 250, 0.10);
+    background: linear-gradient(
+        180deg,
+        rgba(30, 30, 46, 0.78) 0%,
+        rgba(24, 24, 37, 0.80) 100%
+    );
+    border: 1px solid rgba(137, 180, 250, 0.08);
 }
 
-/* ── Camera preview area ────────────────────────────────────────────── */
+/* ── Camera preview area ────────────────────────────────────────────────── */
 .sigil-camera {
-    border-radius: 12px;
+    border-radius: 14px;
     background-color: rgba(17, 17, 27, 0.95);
+    border: 1px solid rgba(108, 112, 134, 0.15);
     min-height: 180px;
 }
 
 .sigil-camera-recording {
-    border-radius: 12px;
+    border-radius: 14px;
     background-color: rgba(17, 17, 27, 0.95);
-    border: 2px solid rgba(243, 139, 168, 0.7);
+    border: 2px solid rgba(243, 139, 168, 0.8);
     min-height: 180px;
 }
 
-/* ── Status section ─────────────────────────────────────────────────── */
+/* ── Status header row ──────────────────────────────────────────────────── */
 .sigil-header {
-    padding: 2px 0;
+    padding: 4px 0 2px 0;
 }
 
-/* ── Labels ─────────────────────────────────────────────────────────── */
+/* ── Mode badge (pill with state color) ─────────────────────────────────── */
+.sigil-mode-badge {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: rgba(30, 30, 46, 1.0);
+    background: linear-gradient(
+        135deg,
+        rgba(137, 180, 250, 0.95) 0%,
+        rgba(116, 199, 236, 0.90) 100%
+    );
+    border-radius: 10px;
+    padding: 3px 10px;
+}
+
+.sigil-mode-badge-recording {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: rgba(30, 30, 46, 1.0);
+    background: linear-gradient(
+        135deg,
+        rgba(243, 139, 168, 0.95) 0%,
+        rgba(235, 160, 172, 0.90) 100%
+    );
+    border-radius: 10px;
+    padding: 3px 10px;
+}
+
+.sigil-mode-badge-tracking {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    color: rgba(30, 30, 46, 1.0);
+    background: linear-gradient(
+        135deg,
+        rgba(166, 227, 161, 0.95) 0%,
+        rgba(148, 226, 213, 0.90) 100%
+    );
+    border-radius: 10px;
+    padding: 3px 10px;
+}
+
+/* ── FPS counter ────────────────────────────────────────────────────────── */
 .sigil-fps {
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 10px;
-    color: rgba(166, 227, 161, 0.7);
+    font-weight: 600;
+    color: rgba(166, 227, 161, 0.65);
 }
 
+/* ── Tracking state dot (inline with header) ────────────────────────────── */
+.sigil-tracking-dot-idle {
+    font-size: 8px;
+    color: rgba(108, 112, 134, 0.5);
+}
+
+.sigil-tracking-dot-tracking {
+    font-size: 8px;
+    color: rgba(166, 227, 161, 0.9);
+}
+
+.sigil-tracking-dot-detected {
+    font-size: 8px;
+    color: rgba(137, 180, 250, 0.9);
+}
+
+.sigil-tracking-dot-fired {
+    font-size: 8px;
+    color: rgba(249, 226, 175, 0.9);
+}
+
+/* ── Active gesture display ─────────────────────────────────────────────── */
 .sigil-gesture {
     font-family: "Inter", "Cantarell", sans-serif;
-    font-size: 14px;
-    font-weight: bold;
+    font-size: 16px;
+    font-weight: 700;
     color: rgba(137, 180, 250, 1.0);
+    letter-spacing: 0.3px;
 }
 
 .sigil-gesture-none {
     font-family: "Inter", "Cantarell", sans-serif;
     font-size: 14px;
-    color: rgba(108, 112, 134, 0.5);
+    font-weight: 500;
+    color: rgba(108, 112, 134, 0.45);
+    font-style: italic;
 }
 
+/* ── Confidence meter bar ───────────────────────────────────────────────── */
+.sigil-confidence-trough {
+    background-color: rgba(49, 50, 68, 0.6);
+    border-radius: 3px;
+    min-height: 4px;
+}
+
+.sigil-confidence-trough > trough {
+    background-color: rgba(49, 50, 68, 0.6);
+    border-radius: 3px;
+    min-height: 4px;
+}
+
+.sigil-confidence-trough > trough > progress {
+    background: linear-gradient(
+        90deg,
+        rgba(243, 139, 168, 0.8) 0%,
+        rgba(249, 226, 175, 0.8) 40%,
+        rgba(166, 227, 161, 0.9) 100%
+    );
+    border-radius: 3px;
+    min-height: 4px;
+}
+
+/* ── Activity log (mini-terminal) ───────────────────────────────────────── */
 .sigil-action {
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 10px;
-    color: rgba(203, 166, 247, 0.9);
-    background-color: rgba(203, 166, 247, 0.1);
-    padding: 4px 8px;
-    border-radius: 6px;
+    color: rgba(203, 166, 247, 0.85);
+    background-color: rgba(17, 17, 27, 0.50);
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(203, 166, 247, 0.08);
 }
 
-/* ── Help Box ───────────────────────────────────────────────────────── */
-.sigil-help-box {
-    background-color: rgba(17, 17, 27, 0.4);
-    border-radius: 10px;
-    padding: 8px;
-    border: 1px solid rgba(137, 180, 250, 0.05);
-}
-
-.sigil-help-title {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 9px;
-    font-weight: bold;
-    color: rgba(137, 180, 250, 0.4);
-    margin-bottom: 4px;
-    letter-spacing: 1px;
-}
-
-.sigil-help-row {
-    padding: 1px 0;
-}
-
-.sigil-help-trigger {
-    font-family: "Inter", sans-serif;
-    font-size: 11px;
-    font-weight: bold;
-    color: rgba(205, 214, 244, 0.8);
-}
-
-.sigil-help-effect {
-    font-family: "Inter", sans-serif;
-    font-size: 11px;
-    color: rgba(166, 173, 200, 0.6);
-}
-
-/* ── Help Window ────────────────────────────────────────────────────── */
-.sigil-help-window {
-    background-color: transparent;
-}
-
-.sigil-help-panel {
-    background-color: rgba(30, 30, 46, 0.95);
-    border-radius: 20px;
-    padding: 24px;
-    border: 1px solid rgba(137, 180, 250, 0.3);
-    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
-}
-
-.sigil-help-window-title {
-    font-family: "Inter", sans-serif;
-    font-size: 16px;
-    font-weight: 800;
-    color: #89b4fa;
-    letter-spacing: 2px;
-    margin-bottom: 8px;
-}
-
-/* ── Mode badge ─────────────────────────────────────────────────────── */
+/* ── Recording section ──────────────────────────────────────────────────── */
 .sigil-recording-label {
     font-family: "Inter", "Cantarell", sans-serif;
-    font-size: 12px;
-    font-weight: bold;
+    font-size: 13px;
+    font-weight: 700;
     color: rgba(243, 139, 168, 1.0);
+    letter-spacing: 0.5px;
 }
 
 .sigil-recording-count {
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 11px;
-    color: rgba(205, 214, 244, 0.9);
+    font-weight: 600;
+    color: rgba(205, 214, 244, 0.85);
 }
 
 .sigil-progress-trough {
-    background-color: rgba(49, 50, 68, 0.8);
-    border-radius: 4px;
-    min-height: 6px;
+    background-color: rgba(49, 50, 68, 0.7);
+    border-radius: 5px;
+    min-height: 8px;
 }
 
-.sigil-progress-bar {
-    background-color: rgba(243, 139, 168, 0.85);
-    border-radius: 4px;
-    min-height: 6px;
+.sigil-progress-trough > trough {
+    background-color: rgba(49, 50, 68, 0.7);
+    border-radius: 5px;
+    min-height: 8px;
 }
 
-/* ── Toast messages ─────────────────────────────────────────────────── */
+.sigil-progress-trough > trough > progress {
+    background: linear-gradient(
+        90deg,
+        rgba(243, 139, 168, 0.9) 0%,
+        rgba(235, 160, 172, 0.85) 100%
+    );
+    border-radius: 5px;
+    min-height: 8px;
+}
+
+/* ── Toast notifications ────────────────────────────────────────────────── */
 .sigil-toast {
-    background-color: rgba(49, 50, 68, 0.90);
-    border-radius: 8px;
-    padding: 6px 12px;
+    border-radius: 10px;
+    padding: 8px 14px;
+    border: 1px solid rgba(137, 180, 250, 0.12);
+}
+
+.sigil-toast-action {
+    background: linear-gradient(
+        135deg,
+        rgba(49, 50, 68, 0.92) 0%,
+        rgba(39, 39, 55, 0.95) 100%
+    );
+    border: 1px solid rgba(166, 227, 161, 0.15);
+}
+
+.sigil-toast-config {
+    background: linear-gradient(
+        135deg,
+        rgba(49, 50, 68, 0.92) 0%,
+        rgba(39, 39, 55, 0.95) 100%
+    );
     border: 1px solid rgba(137, 180, 250, 0.15);
+}
+
+.sigil-toast-warning {
+    background: linear-gradient(
+        135deg,
+        rgba(49, 50, 68, 0.92) 0%,
+        rgba(39, 39, 55, 0.95) 100%
+    );
+    border: 1px solid rgba(249, 226, 175, 0.18);
 }
 
 .sigil-toast-text {
     font-family: "Inter", "Cantarell", sans-serif;
     font-size: 11px;
-    font-weight: bold;
+    font-weight: 600;
     color: rgba(166, 227, 161, 0.95);
 }
 
-/* ── Dot indicators ─────────────────────────────────────────────────── */
+.sigil-toast-text-config {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(137, 180, 250, 0.95);
+}
+
+.sigil-toast-text-warning {
+    font-family: "Inter", "Cantarell", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(249, 226, 175, 0.95);
+}
+
+/* ── Separator ──────────────────────────────────────────────────────────── */
+.sigil-separator {
+    background-color: rgba(69, 71, 90, 0.35);
+    min-height: 1px;
+    margin: 6px 0;
+}
+
+/* ── Help window ────────────────────────────────────────────────────────── */
+.sigil-help-window {
+    background-color: transparent;
+}
+
+.sigil-help-panel {
+    background: linear-gradient(
+        180deg,
+        rgba(30, 30, 46, 0.96) 0%,
+        rgba(24, 24, 37, 0.97) 100%
+    );
+    border-radius: 20px;
+    padding: 20px 24px;
+    border: 1px solid rgba(137, 180, 250, 0.18);
+    box-shadow:
+        0 16px 56px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(205, 214, 244, 0.05);
+}
+
+.sigil-help-window-title {
+    font-family: "Inter", sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    color: rgba(137, 180, 250, 0.9);
+    letter-spacing: 2.5px;
+    margin-bottom: 12px;
+}
+
+/* ── Help section headers (Right Hand / Left Hand / etc.) ───────────────── */
+.sigil-help-section-header {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(108, 112, 134, 0.7);
+    letter-spacing: 1.5px;
+    margin-top: 10px;
+    margin-bottom: 4px;
+}
+
+/* ── Help gesture rows ──────────────────────────────────────────────────── */
+.sigil-help-row-box {
+    padding: 4px 8px;
+    border-radius: 8px;
+    margin: 1px 0;
+}
+
+.sigil-help-row-box:hover {
+    background-color: rgba(49, 50, 68, 0.4);
+}
+
+.sigil-help-emoji {
+    font-size: 14px;
+    min-width: 24px;
+}
+
+.sigil-help-trigger {
+    font-family: "Inter", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(205, 214, 244, 0.85);
+}
+
+.sigil-help-arrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: rgba(108, 112, 134, 0.4);
+}
+
+.sigil-help-effect {
+    font-family: "Inter", sans-serif;
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(166, 173, 200, 0.6);
+}
+
+/* ── Help footer ────────────────────────────────────────────────────────── */
+.sigil-help-footer {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px;
+    color: rgba(108, 112, 134, 0.4);
+    margin-top: 8px;
+    letter-spacing: 0.5px;
+}
+
+/* ── Dot indicators ─────────────────────────────────────────────────────── */
 .sigil-dot-idle {
     color: rgba(108, 112, 134, 0.5);
 }
@@ -181,30 +376,7 @@
     color: rgba(243, 139, 168, 1.0);
 }
 
-/* ── Mode badge ─────────────────────────────────────────────────────── */
-.sigil-mode-badge {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 9px;
-    font-weight: bold;
-    color: rgba(17, 17, 27, 1.0);
-    background-color: rgba(137, 180, 250, 0.85);
-    border-radius: 3px;
-    padding: 1px 5px;
-}
-
-.sigil-mode-badge-recording {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 9px;
-    font-weight: bold;
-    color: rgba(17, 17, 27, 1.0);
-    background-color: rgba(243, 139, 168, 0.90);
-    border-radius: 3px;
-    padding: 1px 5px;
-}
-
-/* ── Separator ──────────────────────────────────────────────────────── */
-.sigil-separator {
-    background-color: rgba(69, 71, 90, 0.4);
-    min-height: 1px;
-    margin: 4px 0;
+/* ── Info stack (fixed height to prevent layout jumps) ───────────────────── */
+.sigil-info-stack {
+    min-height: 72px;
 }

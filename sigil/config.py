@@ -34,12 +34,15 @@ class TrackingConfig:
     num_hands: int = 2
     min_detection_confidence: float = 0.7
     min_tracking_confidence: float = 0.6
-    model_asset_path: str = "hand_landmarker.task"
+    model_asset_path: str = "gesture_recognizer.task"  # fallback if GestureRecognizer fails
+    instant_model_path: str | None = None  # Custom .tflite model
     camera_id: int = 0
     frame_width: int = 1280
     frame_height: int = 720
-    target_fps: int = 30
-    low_fps_fallback: int = 15  # §6 graceful degradation
+    target_fps: int = 12
+    low_fps_fallback: int = 8  # §6 graceful degradation
+    inference_scale: float = 0.5  # process landmarks/gesture model on a downscaled frame
+    instant_inference_interval_ms: int = 120  # run MediaPipe gesture model at a capped cadence
     zoom: float = 1.0  # digital zoom level (1.0 = no zoom, >1.0 = cropped)
 
 
@@ -212,11 +215,14 @@ def save_config(cfg: SigilConfig, path: Path | None = None) -> None:
             "min_detection_confidence": cfg.tracking.min_detection_confidence,
             "min_tracking_confidence": cfg.tracking.min_tracking_confidence,
             "model_asset_path": cfg.tracking.model_asset_path,
+            "instant_model_path": cfg.tracking.instant_model_path,
             "camera_id": cfg.tracking.camera_id,
             "frame_width": cfg.tracking.frame_width,
             "frame_height": cfg.tracking.frame_height,
             "target_fps": cfg.tracking.target_fps,
             "low_fps_fallback": cfg.tracking.low_fps_fallback,
+            "inference_scale": cfg.tracking.inference_scale,
+            "instant_inference_interval_ms": cfg.tracking.instant_inference_interval_ms,
             "zoom": cfg.tracking.zoom,
         },
         "recording": {

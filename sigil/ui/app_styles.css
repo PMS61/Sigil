@@ -1,0 +1,229 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sigil Configuration App – Custom Styles (Catppuccin Mocha accents)
+   Base theming handled by libadwaita dark mode.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Sidebar ────────────────────────────────────────────────────────────── */
+.sidebar-box {
+    background-color: rgba(24, 24, 37, 0.97);
+    border-right: 1px solid rgba(69, 71, 90, 0.45);
+}
+
+.sidebar-brand {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: rgba(137, 180, 250, 0.9);
+    padding: 20px 16px 8px 16px;
+}
+
+.sidebar-subtitle {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 1px;
+    color: rgba(166, 173, 200, 0.55);
+    padding: 0 16px 16px 16px;
+}
+
+.nav-listbox {
+    background: transparent;
+    padding: 4px 8px;
+}
+
+.nav-listbox row {
+    border-radius: 10px;
+    margin: 2px 0;
+    padding: 10px 14px;
+    transition: background-color 200ms ease;
+}
+
+.nav-listbox row:selected {
+    background-color: rgba(137, 180, 250, 0.14);
+}
+
+.nav-listbox row:hover:not(:selected) {
+    background-color: rgba(166, 173, 200, 0.06);
+}
+
+.nav-icon {
+    color: rgba(166, 173, 200, 0.7);
+}
+
+.nav-listbox row:selected .nav-icon {
+    color: rgba(137, 180, 250, 0.95);
+}
+
+.nav-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(205, 214, 244, 0.85);
+}
+
+.nav-listbox row:selected .nav-label {
+    color: rgba(205, 214, 244, 1.0);
+    font-weight: 600;
+}
+
+/* ── Content headers ────────────────────────────────────────────────────── */
+.page-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: rgba(205, 214, 244, 0.95);
+}
+
+.page-subtitle {
+    font-size: 13px;
+    color: rgba(166, 173, 200, 0.6);
+}
+
+/* ── Gesture rows ───────────────────────────────────────────────────────── */
+.gesture-emoji {
+    font-size: 22px;
+    min-width: 36px;
+}
+
+.gesture-action {
+    font-size: 11px;
+    font-family: monospace;
+    color: rgba(166, 173, 200, 0.6);
+}
+
+.hand-badge {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background-color: rgba(137, 180, 250, 0.12);
+    color: rgba(137, 180, 250, 0.85);
+}
+
+.hand-badge-left {
+    background-color: rgba(249, 226, 175, 0.12);
+    color: rgba(249, 226, 175, 0.85);
+}
+
+.hand-badge-both {
+    background-color: rgba(166, 227, 161, 0.12);
+    color: rgba(166, 227, 161, 0.85);
+}
+
+/* ── Camera preview ─────────────────────────────────────────────────────── */
+.camera-preview {
+    background-color: rgba(17, 17, 27, 0.95);
+    border-radius: 14px;
+    border: 1px solid rgba(108, 112, 134, 0.2);
+}
+
+.camera-placeholder {
+    font-size: 13px;
+    color: rgba(166, 173, 200, 0.5);
+}
+
+/* ── Recording state ────────────────────────────────────────────────────── */
+.recording-indicator {
+    color: rgba(243, 139, 168, 1.0);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.sample-counter {
+    font-size: 28px;
+    font-weight: 800;
+    color: rgba(166, 227, 161, 0.95);
+}
+
+/* ── Train page ─────────────────────────────────────────────────────────── */
+.model-status-exists {
+    color: rgba(166, 227, 161, 0.9);
+    font-weight: 600;
+}
+
+.model-status-missing {
+    color: rgba(166, 173, 200, 0.4);
+    font-weight: 400;
+    font-style: italic;
+}
+
+.accuracy-label {
+    font-size: 18px;
+    font-weight: 700;
+    color: rgba(137, 180, 250, 0.95);
+}
+
+/* ── About page ─────────────────────────────────────────────────────────── */
+.about-title {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: rgba(137, 180, 250, 0.95);
+}
+
+.about-version {
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(166, 173, 200, 0.6);
+}
+
+.about-path-label {
+    font-size: 11px;
+    font-family: monospace;
+    color: rgba(166, 173, 200, 0.55);
+}
+
+/* ── Empty states ───────────────────────────────────────────────────────── */
+.empty-icon {
+    font-size: 48px;
+    color: rgba(166, 173, 200, 0.25);
+}
+
+.empty-label {
+    font-size: 14px;
+    color: rgba(166, 173, 200, 0.4);
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+.record-start-btn {
+    background-color: rgba(166, 227, 161, 0.18);
+    color: rgba(166, 227, 161, 0.95);
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 10px 24px;
+}
+
+.record-start-btn:hover {
+    background-color: rgba(166, 227, 161, 0.28);
+}
+
+.record-stop-btn {
+    background-color: rgba(243, 139, 168, 0.18);
+    color: rgba(243, 139, 168, 0.95);
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 10px 24px;
+}
+
+.record-stop-btn:hover {
+    background-color: rgba(243, 139, 168, 0.28);
+}
+
+.train-btn {
+    background-color: rgba(137, 180, 250, 0.15);
+    color: rgba(137, 180, 250, 0.95);
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 10px 20px;
+}
+
+.train-btn:hover {
+    background-color: rgba(137, 180, 250, 0.25);
+}
+
+.delete-btn {
+    background-color: rgba(243, 139, 168, 0.1);
+    color: rgba(243, 139, 168, 0.85);
+}
+
+.delete-btn:hover {
+    background-color: rgba(243, 139, 168, 0.2);
+}

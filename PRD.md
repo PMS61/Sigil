@@ -19,7 +19,7 @@ No hardware beyond standard webcam required.
 **3. Scope**  
 In scope:  
 - Real-time dual-hand landmark tracking (MediaPipe Hand Landmarker or Hands solution, num_hands=2).  
-- Gesture types: instant (single-frame pose), gradual (continuous value e.g. pinch openness 0–1), sequential (multi-frame series e.g. swipe then circle).  
+- Gesture types: instant (single-frame pose), gradual (continuous value e.g. pinch openness 0–1), sequential (multi-frame series for complex patterns).  
 - Recording mode for custom gestures (image frames for Model Maker + landmark time-series CSV/JSON).  
 - Training/customization path: MediaPipe Gesture Recognizer .tflite for instant; custom lightweight models/rules for dynamic.  
 - Mapping layer: YAML/JSON config linking gesture outputs to hyprctl dispatch commands.  
@@ -40,7 +40,7 @@ Primary persona: Prathamesh – Linux power user on CachyOS/Hyprland laptop in M
 Use cases:  
 - Instant: Right-hand pinch → close window (killactive).  
 - Gradual: Two-hand distance increase → zoom in (simulate mouse wheel or hyprctl keyword).  
-- Sequential: Left-hand swipe right then circle → switch workspace + launch app.  
+- Sequential: Multi-frame gesture patterns → switch workspace + launch app.  
 - Recording: Enter mode → perform gesture 50+ times → name class → train/map.  
 - Runtime: Background daemon starts with Hyprland → optional hotkey toggle.  
 

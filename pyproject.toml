@@ -25,14 +25,15 @@ dependencies = [
     "mediapipe>=0.10.14",
     "opencv-python>=4.9.0",
     "pyyaml>=6.0",
-    "numpy>=1.26",
+    "numpy>=1.26,<2.0",
 ]
 
 [project.optional-dependencies]
 train = [
     "mediapipe-model-maker>=0.2.1",
     "scikit-learn>=1.4",
-    "tensorflow>=2.16",
+    "jax<0.5",
+    "jaxlib<0.5",
 ]
 wayland = [
     "PyGObject>=3.42",

@@ -5,9 +5,23 @@ Usage:
     sigil record       – enter recording mode
     sigil train        – retrain models from recordings
     sigil config       – show / edit configuration
+    sigil gui          – open the graphical configuration app
 """
 
 from __future__ import annotations
+
+import os
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+os.environ.setdefault("GDK_BACKEND", "x11")
+os.environ.setdefault("EGL_DRIVER", "sw")
+
+# Preload to fix EGL conflicts BEFORE any GTK imports
+import mediapipe
+import tensorflow
 
 import argparse
 import logging
@@ -21,9 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="sigil",
         description="Sigil – Gesture Control Framework for Hyprland",
     )
-    root.add_argument(
-        "-V", "--version", action="version", version=f"%(prog)s {__version__}"
-    )
+    root.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     root.add_argument(
         "-v",
         "--verbose",
@@ -79,14 +91,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── config ───────────────────────────────────────────────────────────────
     cfg = sub.add_parser("config", help="Show or edit configuration")
-    cfg.add_argument(
-        "--path", action="store_true", help="Print config file path and exit"
-    )
+    cfg.add_argument("--path", action="store_true", help="Print config file path and exit")
     cfg.add_argument(
         "--edit",
         action="store_true",
         help="Open config in $EDITOR",
     )
+
+    # ── gui ──────────────────────────────────────────────────────────────────
+    sub.add_parser("gui", help="Open the graphical configuration app")
 
     return root
 
@@ -102,6 +115,7 @@ def _setup_logging(verbosity: int) -> None:
 
 # ── Subcommand handlers ─────────────────────────────────────────────────────
 
+
 def _cmd_run(args: argparse.Namespace) -> None:
     import logging
     import os
@@ -113,6 +127,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     # Suppress absl logging if available
     try:
         import absl.logging
+
         absl.logging.set_verbosity(absl.logging.ERROR)
     except ImportError:
         pass
@@ -149,9 +164,7 @@ def _cmd_record(args: argparse.Namespace) -> None:
 
     tracker.open()
     recorder.start(args.class_name, mode_map[args.mode], hand=args.hand)
-    print(
-        f"Recording '{args.class_name}' ({args.mode}) — press ESC to stop"
-    )
+    print(f"Recording '{args.class_name}' ({args.mode}) — press ESC to stop")
 
     count = 0
     try:
@@ -220,7 +233,24 @@ def _cmd_config(args: argparse.Namespace) -> None:
         print(f"No config found at {config_path}. Run 'sigil run' to generate defaults.")
 
 
+def _cmd_gui() -> None:
+    """Launch the GTK4 configuration GUI."""
+    try:
+        import absl.logging
+
+        absl.logging.set_verbosity(absl.logging.ERROR)
+    except ImportError:
+        pass
+
+    logging.getLogger("mediapipe").setLevel(logging.ERROR)
+
+    from sigil.ui.app import run_gui
+
+    run_gui()
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = _build_parser()
@@ -233,6 +263,7 @@ def main() -> None:
         "record": lambda: _cmd_record(args),
         "train": lambda: _cmd_train(args),
         "config": lambda: _cmd_config(args),
+        "gui": lambda: _cmd_gui(),
     }
 
     handler = handlers.get(args.command)

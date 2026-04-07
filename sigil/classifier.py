@@ -1,9 +1,16 @@
-"""Gesture Classification Engine (§5.2).
+"""Gesture Classification Engine (§5.2) — Single-Pass Architecture.
 
 Three classifier types:
-  - Instant:     Single-frame pose via MediaPipe Gesture Recognizer or custom .tflite.
+  - Instant:     Reads built-in gesture scores from the tracker's FrameResult
+                 (no separate GestureRecognizer — zero extra inference cost).
   - Gradual:     Continuous derived features (pinch distance, curl).
   - Sequential:  Multi-frame time-series via DTW / state-machine on landmark diffs.
+
+Plus:
+  - Geometric:   Custom Random Forest on 96-dim features from the same landmarks.
+
+The GestureClassifier facade merges built-in and geometric results with
+priority logic: custom wins if confident, falls back to built-in.
 """
 
 from __future__ import annotations
@@ -20,7 +27,6 @@ from sigil.config import ExecutionConfig, GestureMapping
 from sigil.tracker import FrameResult, HandResult
 from sigil.utils import (
     count_extended_fingers,
-    ensure_model,
     euclidean,
     finger_curl_angles,
     monotonic_ms,
@@ -29,21 +35,6 @@ from sigil.utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ── Try MediaPipe Gesture Recognizer task API ────────────────────────────────
-_HAS_GESTURE_RECOGNIZER: bool = False
-try:
-    import mediapipe as mp
-    from mediapipe.tasks.python import BaseOptions
-    from mediapipe.tasks.python.vision import (
-        GestureRecognizer,
-        GestureRecognizerOptions,
-        RunningMode,
-    )
-
-    _HAS_GESTURE_RECOGNIZER = True
-except ImportError:
-    pass
 
 
 # ── Result container ─────────────────────────────────────────────────────────
@@ -61,6 +52,7 @@ class ClassificationResult:
     raw_label: str = ""  # underlying model label
     timestamp_ms: int = 0
     continuous: bool = False  # if True, this gesture triggers every frame
+    source: str = ""  # "builtin" | "geometric" for priority resolution
 
 
 # ── Abstract base ────────────────────────────────────────────────────────────
@@ -75,61 +67,44 @@ class BaseClassifier(ABC):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 1.  Instant Classifier (§5.2 – single-frame pose)
+# 1.  Instant Classifier (§5.2 – reads built-in gestures from tracker)
 # ═════════════════════════════════════════════════════════════════════════════
 class InstantClassifier(BaseClassifier):
-    """Uses MediaPipe Gesture Recognizer to classify single-frame hand poses.
+    """Reads built-in gesture scores directly from FrameResult.
 
-    Maps recognised labels to config entries of ``type: instant``.
+    The tracker's GestureRecognizer already produced gesture classifications
+    alongside landmarks — this classifier just maps those to config entries.
+    Zero additional inference cost.
     """
 
     def __init__(
         self,
         mappings: list[GestureMapping],
         execution: ExecutionConfig | None = None,
-        custom_model: str | None = None,
     ) -> None:
         self._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
-        self._recognizer: Any = None
-
-        if _HAS_GESTURE_RECOGNIZER:
-            model_file = custom_model or "gesture_recognizer.task"
-            model_path = ensure_model(model_file)
-            options = GestureRecognizerOptions(
-                base_options=BaseOptions(model_asset_path=str(model_path)),
-                running_mode=RunningMode.VIDEO,
-                num_hands=2,
-                min_hand_detection_confidence=0.7,
-                min_tracking_confidence=0.6,
-            )
-            self._recognizer = GestureRecognizer.create_from_options(options)
-            logger.info("InstantClassifier ready (task API, model=%s)", model_file)
-        else:
-            logger.warning("Gesture Recognizer task unavailable – instant classification disabled")
+        logger.info(
+            "InstantClassifier ready (reads built-in gestures from tracker, %d mappings)",
+            len(self._mappings),
+        )
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
-        results: list[ClassificationResult] = []
-        if self._recognizer is None or frame_result.frame is None:
-            return results
+        if not self._mappings:
+            return []
 
-        import cv2
+        best_per_hand: dict[str, ClassificationResult] = {}
 
-        rgb = cv2.cvtColor(frame_result.frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        recognition = self._recognizer.recognize_for_video(mp_image, frame_result.timestamp_ms)
-
-        for i, gestures in enumerate(recognition.gestures):
-            if not gestures:
+        for hand in frame_result.hands:
+            builtin = hand.builtin_gesture
+            if builtin is None:
                 continue
-            top = gestures[0]
-            label = top.category_name
-            score = top.score
-            handedness = (
-                recognition.handedness[i][0].category_name if recognition.handedness else "Right"
-            )
+
+            label = builtin.label
+            score = builtin.score
+            handedness = hand.handedness
 
             logger.debug(
-                "MediaPipe gesture detected: label=%s, score=%.2f, hand=%s",
+                "Built-in gesture: label=%s, score=%.2f, hand=%s",
                 label,
                 score,
                 handedness,
@@ -139,47 +114,41 @@ class InstantClassifier(BaseClassifier):
             for mapping in self._mappings:
                 pose = mapping.condition.get("pose", "")
                 finger_count = mapping.condition.get("finger_count")
-                hand = frame_result.left if handedness == "Left" else frame_result.right
-                
-                if hand is None:
-                    continue
 
                 pose_match = not pose or pose == label
                 finger_match = True
                 if finger_count is not None:
                     actual_count = count_extended_fingers(hand.landmarks, hand.handedness)
                     finger_match = actual_count == finger_count
-                
+
                 if pose_match and finger_match and self._hand_matches(mapping.hand, handedness):
                     pos = (float(hand.landmarks[8][0]), float(hand.landmarks[8][1]))
 
-                    logger.info(
-                        "Instant gesture matched: %s (pose=%s, hand=%s, conf=%.2f)",
+                    logger.debug(
+                        "Instant gesture matched: %s (pose=%s, hand=%s, conf=%.2f, source=builtin)",
                         mapping.name,
                         label,
                         handedness,
                         score,
                     )
 
-                    results.append(
-                        ClassificationResult(
-                            gesture_name=mapping.name,
-                            gesture_type="instant",
-                            confidence=score,
-                            position=pos,
-                            hand=handedness,
-                            raw_label=label,
-                            timestamp_ms=frame_result.timestamp_ms,
-                            continuous=mapping.continuous,
-                        )
+                    candidate = ClassificationResult(
+                        gesture_name=mapping.name,
+                        gesture_type="instant",
+                        confidence=score,
+                        position=pos,
+                        hand=handedness,
+                        raw_label=label,
+                        timestamp_ms=frame_result.timestamp_ms,
+                        continuous=mapping.continuous,
+                        source="builtin",
                     )
-                    break  # first match priority
-                else:
-                    if pose_match and not finger_match:
-                        logger.debug("Gesture '%s' pose match but finger count mismatch (expected %d, got %d)", 
-                                     mapping.name, finger_count, actual_count)
+                    prev = best_per_hand.get(handedness)
+                    if prev is None or candidate.confidence > prev.confidence:
+                        best_per_hand[handedness] = candidate
+                    break
 
-        return results
+        return list(best_per_hand.values())
 
     @staticmethod
     def _hand_matches(config_hand: str, detected: str) -> bool:
@@ -188,9 +157,7 @@ class InstantClassifier(BaseClassifier):
         return config_hand.lower() == detected.lower()
 
     def close(self) -> None:
-        if self._recognizer is not None:
-            self._recognizer.close()
-            self._recognizer = None
+        pass  # No resources to release — tracker owns the recognizer
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -210,6 +177,13 @@ def _register_feature(name: str):  # type: ignore[no-untyped-def]
 @_register_feature("thumb_index_distance")
 def _feat_thumb_index(hand: HandResult, **_: Any) -> float:
     return thumb_index_distance(hand.landmarks)
+
+
+@_register_feature("pinch_ratio")
+def _feat_pinch_ratio(hand: HandResult, **_: Any) -> float:
+    """Thumb-index distance normalized by wrist-index MCP distance."""
+    base = euclidean(hand.landmarks[0], hand.landmarks[5]) + 1e-7
+    return thumb_index_distance(hand.landmarks) / base
 
 
 @_register_feature("finger_curl_mean")
@@ -268,6 +242,7 @@ class GradualClassifier(BaseClassifier):
         self._prev_landmarks: dict[str, np.ndarray] = {}  # per hand
         self._prev_time: float = 0.0
         self._finger_count_history: dict[str, list[int]] = {}
+        self._hysteresis_state: dict[str, bool] = {}
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         results: list[ClassificationResult] = []
@@ -304,7 +279,7 @@ class GradualClassifier(BaseClassifier):
                 matches = sum(1 for c in count_history if c == finger_count)
                 if matches < 3:  # require at least 3 of last 5 frames to match
                     continue
-                
+
                 # SOLIDITY FIX: If this is a continuous gesture stop immediately
                 if mapping.continuous and actual_count != finger_count:
                     self._finger_count_history[mapping.name] = []
@@ -317,19 +292,59 @@ class GradualClassifier(BaseClassifier):
 
             # Special case for coordinate features (tuples)
             if isinstance(value, tuple):
-                triggered = True
-                pos = (value[0], value[1]) if len(value) >= 2 else None
-                deltas = value if "deltas" in feat_name else None
-                scalar_val = value[2] if len(value) == 3 else 0.0
+                if feat_name == "finger_deltas":
+                    dx, dy = float(value[0]), float(value[1])
+                    min_delta = float(mapping.condition.get("min_delta", 0.05))
+                    component = str(mapping.condition.get("delta_component", "both")).lower()
+
+                    if component == "dx":
+                        metric = abs(dx)
+                    elif component == "dy":
+                        metric = abs(dy)
+                    else:
+                        metric = max(abs(dx), abs(dy))
+
+                    triggered = metric >= min_delta
+                    pos = None
+                    deltas = (dx, dy)
+                    scalar_val = metric
+                else:
+                    triggered = True
+                    pos = (value[0], value[1]) if len(value) >= 2 else None
+                    deltas = value if "deltas" in feat_name else None
+                    scalar_val = value[2] if len(value) == 3 else 0.0
             else:
-                delta = value - prev_val  # type: ignore[operator]
-                min_delta = mapping.condition.get("min_delta", 0.05)
-                direction = mapping.condition.get("direction", "both")
-                triggered = (
-                    (direction == "increase" and delta >= min_delta)
-                    or (direction == "decrease" and delta <= -min_delta)
-                    or (direction == "both" and abs(delta) >= min_delta)
-                )
+                if (
+                    "enter_below" in mapping.condition
+                    or "exit_above" in mapping.condition
+                    or mapping.condition.get("edge") in ("press", "release", "both")
+                ):
+                    enter_below = mapping.condition.get("enter_below")
+                    exit_above = mapping.condition.get("exit_above", enter_below)
+                    edge = str(mapping.condition.get("edge", "both")).lower()
+
+                    was_active = self._hysteresis_state.get(mapping.name, False)
+                    is_active = was_active
+
+                    if enter_below is not None and value <= float(enter_below):
+                        is_active = True
+                    elif exit_above is not None and value >= float(exit_above):
+                        is_active = False
+
+                    triggered = (
+                        (not was_active and is_active and edge in ("press", "both"))
+                        or (was_active and not is_active and edge in ("release", "both"))
+                    )
+                    self._hysteresis_state[mapping.name] = is_active
+                else:
+                    delta = value - prev_val  # type: ignore[operator]
+                    min_delta = mapping.condition.get("min_delta", 0.05)
+                    direction = mapping.condition.get("direction", "both")
+                    triggered = (
+                        (direction == "increase" and delta >= min_delta)
+                        or (direction == "decrease" and delta <= -min_delta)
+                        or (direction == "both" and abs(delta) >= min_delta)
+                    )
                 pos = None
                 deltas = None
                 scalar_val = float(value)
@@ -371,7 +386,103 @@ class GradualClassifier(BaseClassifier):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 3.  Sequential Classifier (§5.2 – temporal multi-frame series)
+# 3.  Geometric Classifier (§5.2 – custom landmark-based pose classification)
+# ═════════════════════════════════════════════════════════════════════════════
+class GeometricClassifier(BaseClassifier):
+    """Uses Random Forest to classify 96-dimensional geometric features.
+
+    Loads .pkl artifacts from MODELS_DIR trained via the landmark architecture.
+    Runs on the SAME landmarks from the tracker — zero extra detection cost.
+    """
+
+    def __init__(
+        self,
+        mappings: list[GestureMapping],
+        execution: ExecutionConfig | None = None,
+        model_name: str = "custom_gesture.pkl",
+    ) -> None:
+        from sigil.config import MODELS_DIR
+
+        self._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
+        self._artifact: dict[str, Any] | None = None
+        self._clf: Any = None
+        self._scaler: Any = None
+        self._class_names: list[str] = []
+
+        model_path = MODELS_DIR / model_name
+        if model_path.exists():
+            try:
+                import joblib
+
+                self._artifact = joblib.load(model_path)
+                self._clf = self._artifact["model"]
+                self._scaler = self._artifact["scaler"]
+                self._class_names = self._artifact["class_names"]
+                logger.info(
+                    "GeometricClassifier loaded model: %s (%d classes)",
+                    model_name,
+                    len(self._class_names),
+                )
+            except Exception as e:
+                logger.error("Failed to load geometric model %s: %s", model_name, e)
+
+    def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
+        results: list[ClassificationResult] = []
+        if self._clf is None:
+            return results
+
+        from sigil.utils import extract_96_features
+
+        for hand in frame_result.hands:
+            try:
+                features = extract_96_features(hand.landmarks)
+                X = np.array([features], dtype=np.float32)
+                X_scaled = self._scaler.transform(X)
+
+                probs = self._clf.predict_proba(X_scaled)[0]
+                idx = np.argmax(probs)
+                label = self._class_names[idx]
+                score = float(probs[idx])
+
+                if label == "None":
+                    continue
+
+                for mapping in self._mappings:
+                    pose = mapping.condition.get("pose", "")
+                    if pose == label and self._hand_matches(mapping.hand, hand.handedness):
+                        pos = (float(hand.landmarks[8][0]), float(hand.landmarks[8][1]))
+                        results.append(
+                            ClassificationResult(
+                                gesture_name=mapping.name,
+                                gesture_type="instant",
+                                confidence=score,
+                                position=pos,
+                                hand=hand.handedness,
+                                raw_label=f"geometric:{label}",
+                                timestamp_ms=frame_result.timestamp_ms,
+                                continuous=mapping.continuous,
+                                source="geometric",
+                            )
+                        )
+                        break
+            except Exception as e:
+                logger.debug("Geometric classification error: %s", e)
+
+        return results
+
+    @staticmethod
+    def _hand_matches(config_hand: str, detected: str) -> bool:
+        if config_hand == "both":
+            return True
+        return config_hand.lower() == detected.lower()
+
+    def close(self) -> None:
+        self._clf = None
+        self._scaler = None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4.  Sequential Classifier (§5.2 – temporal multi-frame series)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -410,23 +521,8 @@ class SequentialClassifier(BaseClassifier):
             self._buffer.append(label)
 
     def feed_landmarks(self, landmarks: np.ndarray) -> None:
-        """Analyze landmark movement to detect swipes and feed the buffer."""
+        """Buffer landmarks for sequential analysis."""
         self._landmark_buffer.append(landmarks.copy())
-        
-        if len(self._landmark_buffer) < 5:
-            return
-
-        # Simple horizontal swipe detection
-        # Compare current palm center to center 5 frames ago
-        curr_p = palm_center(self._landmark_buffer[-1])
-        prev_p = palm_center(self._landmark_buffer[-5])
-        
-        dx = curr_p[0] - prev_p[0]
-        # Threshold for swipe: 15% of screen width in 5 frames
-        if dx > 0.15:
-            self.feed_instant_label("swipe_right")
-        elif dx < -0.15:
-            self.feed_instant_label("swipe_left")
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         results: list[ClassificationResult] = []
@@ -481,72 +577,218 @@ class SequentialClassifier(BaseClassifier):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4.  Unified Classifier Facade
+# 5.  Unified Classifier Facade — Single-Pass Dual Classification
 # ═════════════════════════════════════════════════════════════════════════════
 class GestureClassifier:
-    """Unified facade that runs all three sub-classifiers (§5.2 hybrid).
+    """Unified facade: reads built-in gestures + runs geometric model on same landmarks.
 
-    Instant gesture execution model:
-      - A gesture must be detected for ``confirm_frames`` consecutive frames
-        (each above ``confidence_threshold``) before it fires.
-      - Once an instant action fires, ALL classification is suppressed for
-        ``blanking_ms`` to prevent hand-transition noise from triggering
-        unintended actions.
+    Single-Pass Architecture:
+    - Built-in (7 classes): Read from tracker's FrameResult (zero cost)
+    - Geometric (custom RF): Runs on same landmarks (~1–2ms)
+
+    Priority / Merge Logic:
+    - Custom gesture wins if confident — it's why you trained it
+    - Fall back to built-in if custom is 'none' or below threshold
+    - 'none' only if both are silent
+
+    Smoothing: 7-frame buffer for stable output display.
     """
+
+    # Minimum confidence for geometric to override builtin
+    GEOMETRIC_MIN_CONFIDENCE = 0.60
+    # Buffer size for smoothing
+    SMOOTHING_BUFFER_SIZE = 7
 
     def __init__(
         self,
         mappings: list[GestureMapping],
         execution: ExecutionConfig | None = None,
         custom_instant_model: str | None = None,
+        instant_inference_interval_ms: int = 0,
     ) -> None:
-        self.instant = InstantClassifier(mappings, execution, custom_instant_model)
+        # Built-in gesture reader (reads from FrameResult, no separate recognizer)
+        self.instant = InstantClassifier(mappings, execution)
+        # Custom geometric classifier (RF on 96-dim features)
+        self.geometric = GeometricClassifier(mappings, execution)
+        # Continuous feature classifiers
         self.gradual = GradualClassifier(mappings, execution)
         self.sequential = SequentialClassifier(mappings)
-        self._last_fire: dict[str, int] = {}  # per-gesture cooldown tracking
+        self._last_fire: dict[str, int] = {}
 
-        # Execution policy
         exec_cfg = execution or ExecutionConfig()
         self._confirm_frames = max(1, exec_cfg.confirm_frames)
         self._blanking_ms = exec_cfg.blanking_ms
         self._confidence_threshold = exec_cfg.confidence_threshold
 
-        # Confirmation state for instant gestures:
-        # tracks consecutive frames a specific gesture has been seen
         self._instant_streak: dict[str, int] = {}
-
-        # Global blanking timestamp – 0 means inactive
+        self._blanking_left: int = 0
+        self._blanking_right: int = 0
+        # Backward-compatible aggregate blanking timestamp used by existing tests.
         self._blanking_until: int = 0
-        self._mappings = mappings  # keep reference for lookups
+        self._mappings = mappings
+        self._instant_inference_interval_ms = max(0, instant_inference_interval_ms)
+        self._last_instant_inference_ts = -1
+
+        # Smoothing buffer per hand: stores recent gesture labels
+        self._smoothing_buffer: dict[str, list[str]] = {
+            "left": [],
+            "right": [],
+            "unknown": [],
+        }
+
+    @staticmethod
+    def _normalize_hand_key(hand: str) -> str:
+        lowered = hand.lower()
+        if lowered in ("left", "right"):
+            return lowered
+        return "unknown"
+
+    def _apply_priority_and_smoothing(
+        self,
+        builtin_results: list[ClassificationResult],
+        geometric_results: list[ClassificationResult],
+    ) -> list[ClassificationResult]:
+        """Merge built-in and geometric results with priority logic.
+
+        Priority rules:
+        1. Custom gesture wins if it fired — it's why you trained it
+        2. Fall back to built-in if custom is absent
+        3. Apply 7-frame smoothing buffer for display stability
+        """
+        if not builtin_results and not geometric_results:
+            return []
+
+        resolved: list[ClassificationResult] = []
+
+        for hand_key in ["left", "right", "unknown"]:
+            hand_builtins = [
+                r for r in builtin_results if self._normalize_hand_key(r.hand) == hand_key
+            ]
+            hand_geometrics = [
+                r for r in geometric_results if self._normalize_hand_key(r.hand) == hand_key
+            ]
+
+            if not hand_builtins and not hand_geometrics:
+                continue
+
+            best: ClassificationResult | None = None
+
+            if hand_geometrics:
+                geo_best = max(hand_geometrics, key=lambda r: r.confidence)
+                geo_conf = geo_best.confidence
+
+                if hand_builtins:
+                    builtin_best = max(hand_builtins, key=lambda r: r.confidence)
+                    bp_conf = builtin_best.confidence
+
+                    # Custom wins if above threshold AND beats built-in
+                    if geo_conf >= self.GEOMETRIC_MIN_CONFIDENCE and geo_conf > bp_conf:
+                        best = geo_best
+                        logger.debug(
+                            "Geometric wins: %.2f >= %.2f AND > built-in %.2f",
+                            geo_conf,
+                            self.GEOMETRIC_MIN_CONFIDENCE,
+                            bp_conf,
+                        )
+                    else:
+                        best = builtin_best
+                        logger.debug(
+                            "Built-in wins: Geometric %.2f < %.2f threshold or <= built-in %.2f",
+                            geo_conf,
+                            self.GEOMETRIC_MIN_CONFIDENCE,
+                            bp_conf,
+                        )
+                else:
+                    if geo_conf >= self.GEOMETRIC_MIN_CONFIDENCE:
+                        best = geo_best
+                        logger.debug(
+                            "Geometric wins (no built-in): %.2f >= %.2f",
+                            geo_conf,
+                            self.GEOMETRIC_MIN_CONFIDENCE,
+                        )
+                    else:
+                        logger.debug(
+                            "No gesture wins: geometric %.2f below threshold %.2f",
+                            geo_conf,
+                            self.GEOMETRIC_MIN_CONFIDENCE,
+                        )
+            elif hand_builtins:
+                best = max(hand_builtins, key=lambda r: r.confidence)
+                logger.debug("Built-in wins (no geometric): %.2f", best.confidence)
+
+            if best:
+                buffer = self._smoothing_buffer[hand_key]
+                buffer.append(best.gesture_name)
+                if len(buffer) > self.SMOOTHING_BUFFER_SIZE:
+                    buffer.pop(0)
+
+                # Avoid early-frame inertia: before buffer is full, keep current label.
+                if len(buffer) < self.SMOOTHING_BUFFER_SIZE:
+                    smoothed_gesture = best.gesture_name
+                else:
+                    smoothed_gesture = max(set(buffer), key=buffer.count)
+
+                smoothed_result = ClassificationResult(
+                    gesture_name=smoothed_gesture,
+                    gesture_type=best.gesture_type,
+                    confidence=best.confidence,
+                    position=best.position,
+                    hand=best.hand,
+                    raw_label=best.raw_label,
+                    timestamp_ms=best.timestamp_ms,
+                    continuous=best.continuous,
+                    source=best.source,
+                )
+                resolved.append(smoothed_result)
+
+        return resolved
 
     def classify(self, frame_result: FrameResult) -> list[ClassificationResult]:
         """Run all classifiers and return de-duplicated, cooldown-filtered results."""
         now = monotonic_ms()
 
-        # ── Global blanking: suppress EVERYTHING except continuous actions ─────
-        blanking_active = now < self._blanking_until
+        # 1. Read built-in gestures (zero cost — already in FrameResult)
+        #    and run geometric classifier on same landmarks (~1–2ms)
+        run_instant = True
+        if self._instant_inference_interval_ms > 0:
+            if (
+                self._last_instant_inference_ts >= 0
+                and frame_result.timestamp_ms - self._last_instant_inference_ts
+                < self._instant_inference_interval_ms
+            ):
+                run_instant = False
 
-        all_results: list[ClassificationResult] = []
+        if run_instant:
+            builtin_results = self.instant.classify(frame_result)
+            self._last_instant_inference_ts = frame_result.timestamp_ms
+        else:
+            builtin_results = []
 
-        # 1. Instant — apply confirmation logic
-        instant_results = self.instant.classify(frame_result)
-        for r in instant_results:
-            self.sequential.feed_instant_label(r.raw_label)
+        geometric_results = self.geometric.classify(frame_result)
+
+        # 2. Resolve conflicts with priority logic + smoothing
+        resolved_instants = self._apply_priority_and_smoothing(builtin_results, geometric_results)
+
+        for r in resolved_instants:
+            if run_instant and r.source == "builtin":
+                self.sequential.feed_instant_label(r.raw_label)
             logger.debug(
-                "Instant gesture detected: %s (label=%s, conf=%.2f, hand=%s)",
+                "%s gesture: %s (label=%s, conf=%.2f, source=%s)",
+                r.gesture_type.title(),
                 r.gesture_name,
                 r.raw_label,
                 r.confidence,
-                r.hand,
+                r.source,
             )
-        confirmed_instants = self._apply_instant_confirmation(instant_results, now)
+
+        confirmed_instants = self._apply_instant_confirmation(resolved_instants, now)
+        all_results: list[ClassificationResult] = []
         all_results.extend(confirmed_instants)
 
-        # 2. Gradual (only if no instant action fired this frame)
-        if not confirmed_instants:
-            all_results.extend(self.gradual.classify(frame_result))
+        # 3. Gradual
+        all_results.extend(self.gradual.classify(frame_result))
 
-        # 3. Sequential
+        # 4. Sequential
         all_results.extend(self.sequential.classify(frame_result))
 
         # Feed landmarks for sequential DTW
@@ -555,12 +797,22 @@ class GestureClassifier:
 
         # Filter results based on blanking and cooldowns
         filtered: list[ClassificationResult] = []
+
         for r in all_results:
             is_continuous = self._is_continuous(r.gesture_name)
 
-            # ── Blanking filter ─────────────────────────────────────────────
-            if blanking_active and not is_continuous:
-                continue
+            # ── Hand-specific Blanking filter ────────────────────────────────
+            if not is_continuous:
+                if r.hand.lower() == "left" and now < self._blanking_left:
+                    continue
+                if r.hand.lower() == "right" and now < self._blanking_right:
+                    continue
+                if r.hand.lower() == "both" and (
+                    now < self._blanking_left or now < self._blanking_right
+                ):
+                    continue
+                if not r.hand and now < self._blanking_until:
+                    continue
 
             if is_continuous:
                 # Continuous gestures bypass cooldown and don't trigger blanking
@@ -572,18 +824,39 @@ class GestureClassifier:
                     self._last_fire[r.gesture_name] = now
                     filtered.append(r)
 
-        # If any NON-CONTINUOUS action (instant or sequential) fired → activate global blanking
+        # Update per-hand blanking if a discrete action fired
         for r in filtered:
-            if r.gesture_type in ("instant", "sequential") and not self._is_continuous(r.gesture_name):
-                self._blanking_until = now + self._blanking_ms
-                self._instant_streak.clear()
-                logger.info(
-                    "%s action '%s' confirmed – blanking for %d ms",
+            if r.gesture_type in ("instant", "sequential") and not self._is_continuous(
+                r.gesture_name
+            ):
+                blanking_ms = self._lookup_blanking(r.gesture_name)
+
+                # Apply blanking to the hand that triggered it
+                if r.hand.lower() in ("left", "both"):
+                    self._blanking_left = now + blanking_ms
+                if r.hand.lower() in ("right", "both"):
+                    self._blanking_right = now + blanking_ms
+
+                # Unknown hand (e.g. mocked tests): preserve legacy global blanking behavior.
+                if not r.hand:
+                    self._blanking_until = now + blanking_ms
+                else:
+                    self._blanking_until = max(self._blanking_left, self._blanking_right)
+
+                # We clear streaks for the triggering hand to avoid immediate repeat
+                for name in list(self._instant_streak.keys()):
+                    # Finding the mapping to check which hand it belongs to
+                    m = next((m for m in self._mappings if m.name == name), None)
+                    if m and (m.hand.lower() == r.hand.lower() or r.hand.lower() == "both"):
+                        self._instant_streak[name] = 0
+
+                logger.debug(
+                    "%s action '%s' confirmed on %s hand – blanking for %d ms",
                     r.gesture_type.title(),
                     r.gesture_name,
-                    self._blanking_ms,
+                    r.hand,
+                    blanking_ms,
                 )
-                break  # one trigger is enough to blank
 
         return filtered
 
@@ -629,16 +902,17 @@ class GestureClassifier:
 
             # Increment streak for this gesture independently
             self._instant_streak[name] = self._instant_streak.get(name, 0) + 1
+            required = self._lookup_confirm_frames(name)
             logger.debug(
-                "Gesture '%s' streak: %d/%d", name, self._instant_streak[name], self._confirm_frames
+                "Gesture '%s' streak: %d/%d", name, self._instant_streak[name], required
             )
 
-            if self._instant_streak[name] >= self._confirm_frames:
-                logger.info(
+            if self._instant_streak[name] >= required:
+                logger.debug(
                     "Gesture '%s' CONFIRMED (streak=%d >= %d)",
                     name,
                     self._instant_streak[name],
-                    self._confirm_frames,
+                    required,
                 )
                 confirmed.append(r)
 
@@ -657,23 +931,46 @@ class GestureClassifier:
                 return m.cooldown_ms
         return 300
 
-    def reload(self, mappings: list[GestureMapping], execution: ExecutionConfig | None = None) -> None:
+    def _lookup_confirm_frames(self, gesture_name: str) -> int:
+        """Find per-gesture confirm_frames override, else fallback to global."""
+        for m in self._mappings:
+            if m.name == gesture_name:
+                if m.confirm_frames is None:
+                    return self._confirm_frames
+                return max(1, m.confirm_frames)
+        return self._confirm_frames
+
+    def _lookup_blanking(self, gesture_name: str) -> int:
+        """Find per-gesture blanking override, else fallback to global."""
+        for m in self._mappings:
+            if m.name == gesture_name:
+                return self._blanking_ms if m.blanking_ms is None else m.blanking_ms
+        return self._blanking_ms
+
+    def reload(
+        self, mappings: list[GestureMapping], execution: ExecutionConfig | None = None
+    ) -> None:
         """Update classifier mappings and execution policy."""
         self._mappings = mappings
         exec_cfg = execution or ExecutionConfig()
         self._confirm_frames = max(1, exec_cfg.confirm_frames)
         self._blanking_ms = exec_cfg.blanking_ms
         self._confidence_threshold = exec_cfg.confidence_threshold
-        
+
         # Propagate to sub-classifiers
         self.instant._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
+        self.geometric._mappings = [m for m in mappings if m.type == "instant" and m.enabled]
         self.gradual._mappings = [m for m in mappings if m.type == "gradual" and m.enabled]
         self.sequential._mappings = [m for m in mappings if m.type == "sequential" and m.enabled]
-        
-        logger.info("GestureClassifier reloaded (blanking=%dms, confirm=%df)", 
-                    self._blanking_ms, self._confirm_frames)
+
+        logger.info(
+            "GestureClassifier reloaded (blanking=%dms, confirm=%df)",
+            self._blanking_ms,
+            self._confirm_frames,
+        )
 
     def close(self) -> None:
         self.instant.close()
+        self.geometric.close()
         self.gradual.close()
         self.sequential.close()

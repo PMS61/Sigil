@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from sigil.classifier import ClassificationResult
-from sigil.config import GestureMapping, SigilConfig
+from sigil.config import ExecutionConfig, GestureMapping, SigilConfig
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,34 @@ class Executor:
         """Replace placeholders in action string with actual values."""
         if not result:
             return action
+
+        # Cursor position interpolation (normalized + pixel), with sensitivity and EMA smoothing.
+        if result.position is not None:
+            px, py = result.position
+
+            # Apply sensitivity around screen center to keep values in [0, 1].
+            nx = 0.5 + ((float(px) - 0.5) * self._sensitivity)
+            ny = 0.5 + ((float(py) - 0.5) * self._sensitivity)
+            nx = max(0.0, min(1.0, nx))
+            ny = max(0.0, min(1.0, ny))
+
+            # Exponential smoothing for stable cursor updates.
+            if self._last_norm_pos is None:
+                sx, sy = nx, ny
+            else:
+                lx, ly = self._last_norm_pos
+                a = self._smoothing_alpha
+                sx = (1.0 - a) * lx + a * nx
+                sy = (1.0 - a) * ly + a * ny
+
+            self._last_norm_pos = (sx, sy)
+
+            x = int(sx * self._screen_res[0])
+            y = int(sy * self._screen_res[1])
+            action = action.replace("{x}", str(x))
+            action = action.replace("{y}", str(y))
+            action = action.replace("{nx}", f"{sx:.4f}")
+            action = action.replace("{ny}", f"{sy:.4f}")
         
         # Base value interpolation
         action = action.replace("{val}", f"{result.value:.4f}")
