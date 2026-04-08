@@ -1,7 +1,7 @@
 """Model Training & Management (§5.4).
 
 Provides one-click retrain commands using the landmark architecture with data augmentation:
-  - Raw 21-point landmarks → Augmentation (8x) → 96-dim features → Random Forest
+  - Raw 21-point landmarks → Augmentation (12x) → 101-dim features → Random Forest
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from sigil.utils import LandmarkAugmenter, extract_96_features
 
 logger = logging.getLogger(__name__)
 
-AUGMENTATION_MULTIPLIER = 8
+AUGMENTATION_MULTIPLIER = 12
 
 
 def _load_raw_landmarks(
@@ -68,19 +68,8 @@ def _load_raw_landmarks(
 
                 logger.info("Extracting landmarks from %d images in '%s'…", len(jpgs), cls)
                 for img_path in sorted(jpgs):
-                    feats_dict = _extract_features_from_image(img_path)
-                    if feats_dict:
-                        lm = np.array(
-                            [
-                                [
-                                    feats_dict[f"feat_{i * 3}"],
-                                    feats_dict[f"feat_{i * 3 + 1}"],
-                                    feats_dict[f"feat_{i * 3 + 2}"],
-                                ]
-                                for i in range(21)
-                            ],
-                            dtype=np.float32,
-                        )
+                    lm = _extract_landmarks_from_image(img_path)
+                    if lm is not None and lm.shape == (21, 3):
                         cls_landmarks.append(lm)
             except ImportError:
                 logger.warning(
@@ -102,7 +91,7 @@ def _augment_and_extract(
     labels: list[int],
     multiplier: int = AUGMENTATION_MULTIPLIER,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Apply augmentation and extract 96-dim features.
+    """Apply augmentation and extract 101-dim features.
 
     Args:
         raw_landmarks: List of (21, 3) raw landmark arrays
@@ -128,6 +117,51 @@ def _augment_and_extract(
             augmented_labels.append(label)
 
     return np.array(features, dtype=np.float32), np.array(augmented_labels)
+
+
+def _extract_landmarks_from_image(img_path: Path) -> np.ndarray | None:
+    """Extract raw 21-point 3D landmarks from a single JPG image using MediaPipe HandLandmarker."""
+    import cv2
+    import numpy as np
+
+    from sigil.utils import ensure_model, landmark_to_array
+
+    img = cv2.imread(str(img_path))
+    if img is None:
+        return None
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    try:
+        from mediapipe.tasks.python import BaseOptions
+        from mediapipe.tasks.python.vision import (
+            HandLandmarker,
+            HandLandmarkerOptions,
+            RunningMode,
+        )
+        from mediapipe import Image, ImageFormat
+
+        model_path = ensure_model("hand_landmarker.task")
+
+        options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            running_mode=RunningMode.IMAGE,
+            num_hands=1,
+        )
+
+        with HandLandmarker.create_from_options(options) as landmarker:
+            mp_image = Image(image_format=ImageFormat.SRGB, data=rgb)
+            result = landmarker.detect(mp_image)
+
+            if not result.hand_landmarks:
+                return None
+
+            landmarks = landmark_to_array(result.hand_landmarks[0])
+            return landmarks
+
+    except (ImportError, Exception) as e:
+        logger.warning("Failed to extract landmarks from %s: %s", img_path, e)
+        return None
 
 
 def _extract_features_from_image(img_path: Path) -> dict[str, Any] | None:
@@ -163,7 +197,7 @@ def _extract_features_from_image(img_path: Path) -> dict[str, Any] | None:
         )
 
         with HandLandmarker.create_from_options(options) as landmarker:
-            mp_image = Image(image_format=ImageFormat.SRGB.value, data=rgb)
+            mp_image = Image(image_format=ImageFormat.SRGB, data=rgb)
             result = landmarker.detect(mp_image)
 
             if not result.hand_landmarks:
@@ -197,7 +231,7 @@ def _extract_features_from_image(img_path: Path) -> dict[str, Any] | None:
         with HandLandmarker.create_from_options(options) as landmarker:
             from mediapipe import ImageFormat, Image
 
-            mp_image = Image(image_format=ImageFormat.SRGB.value, data=rgb)
+            mp_image = Image(image_format=ImageFormat.SRGB, data=rgb)
 
             result = landmarker.detect(mp_image)
 
@@ -231,7 +265,7 @@ def _extract_features_from_image(img_path: Path) -> dict[str, Any] | None:
             mp_image = type("obj", (object,), {"image_format": 1})()
             from mediapipe import ImageFormat, Image
 
-            mp_image = Image(image_format=ImageFormat.SRGB.value, data=rgb)
+            mp_image = Image(image_format=ImageFormat.SRGB, data=rgb)
 
             recognition = recognizer.recognize(mp_image)
 
@@ -261,14 +295,14 @@ def train_instant(
 
     Pipeline:
     1. Load raw 21-point landmarks from JSON files
-    2. Apply augmentation (8x): rotate ±15°, add jitter
-    3. Extract 96-dim geometric features from augmented data
-    4. Train Random Forest (150 trees)
+    2. Apply augmentation (12x): rotate ±20°, scale ±10%, translate ±2%, add jitter
+    3. Extract 101-dim geometric features from augmented data
+    4. Train Random Forest (250 trees with class balancing)
 
     Args:
         data_dir: Path to recordings directory
         output_path: Path for output model file
-        augmentation: Multiplier for data augmentation (default 8x)
+        augmentation: Multiplier for data augmentation (default 12x)
 
     Returns:
         Path to trained model
@@ -337,21 +371,30 @@ def train_instant(
     feat_test = scaler.transform(feat_test)
 
     clf = RandomForestClassifier(
-        n_estimators=150,
-        max_depth=15,
-        min_samples_split=5,
+        n_estimators=250,
+        max_depth=20,
+        min_samples_split=3,
         min_samples_leaf=2,
+        max_features="sqrt",
+        bootstrap=True,
+        oob_score=True,
+        class_weight="balanced",
         random_state=42,
         n_jobs=-1,
     )
 
-    logger.info("Training Random Forest (150 trees) …")
+    logger.info("Training Random Forest (250 trees with class balancing) …")
     clf.fit(feat_train, y_train)
 
     accuracy = clf.score(feat_test, y_test)
-    logger.info("Model accuracy: %.4f", accuracy)
+    oob_score = clf.oob_score_ if hasattr(clf, "oob_score_") else 0.0
+    logger.info("Model accuracy: %.4f (OOB: %.4f)", accuracy, oob_score)
     report = classification_report(y_test, clf.predict(feat_test), target_names=final_classes)
     logger.info("Classification report:\n%s", report)
+    
+    feature_importance = clf.feature_importances_
+    top_features = np.argsort(feature_importance)[-10:][::-1]
+    logger.info("Top 10 feature indices: %s", top_features)
 
     artifact = {
         "model": clf,
@@ -360,6 +403,9 @@ def train_instant(
         "augmentation": augmentation,
         "original_samples": len(raw_landmarks),
         "augmented_samples": len(features),
+        "accuracy": accuracy,
+        "oob_score": oob_score,
+        "feature_importance": feature_importance,
     }
     joblib.dump(artifact, out)
     logger.info("Exported geometric model → %s", out)

@@ -259,12 +259,14 @@ class LandmarkAugmenter:
     """Creates realistic variations of raw 3D hand landmarks for data augmentation.
 
     Augmentation strategies:
-    - 3D Rotation: Randomly rotate hand ±15 degrees around X, Y, Z axes
-    - Gaussian Noise: Add tracking jitter (±0.003) to simulate MediaPipe inaccuracy
+    - 3D Rotation: Randomly rotate hand ±20 degrees around X, Y, Z axes
+    - Gaussian Noise: Add tracking jitter (±0.005) to simulate MediaPipe inaccuracy
+    - Scale Variation: Apply ±10% scaling to simulate depth changes
+    - Translation: Apply ±2% position shift to simulate hand movement
     """
 
     @staticmethod
-    def _rotate_points_around_wrist(points: np.ndarray, max_angle: float = 15.0) -> np.ndarray:
+    def _rotate_points_around_wrist(points: np.ndarray, max_angle: float = 20.0) -> np.ndarray:
         """Rotates the hand around the wrist pivot point."""
         wrist = points[0].copy()
         centered = points - wrist
@@ -286,13 +288,28 @@ class LandmarkAugmenter:
         return rotated + wrist
 
     @staticmethod
-    def _add_jitter(points: np.ndarray, noise_level: float = 0.003) -> np.ndarray:
+    def _add_jitter(points: np.ndarray, noise_level: float = 0.005) -> np.ndarray:
         """Adds Gaussian noise to simulate MediaPipe tracking jitter."""
         noise = np.random.normal(0, noise_level, points.shape)
         return points + noise
 
     @staticmethod
-    def augment(raw_landmarks: np.ndarray, multiplier: int = 8) -> list[np.ndarray]:
+    def _apply_scale(points: np.ndarray, scale_range: tuple[float, float] = (0.9, 1.1)) -> np.ndarray:
+        """Apply random scaling to simulate depth variation."""
+        wrist = points[0].copy()
+        centered = points - wrist
+        scale = np.random.uniform(*scale_range)
+        scaled = centered * scale
+        return scaled + wrist
+
+    @staticmethod
+    def _apply_translation(points: np.ndarray, translation_range: float = 0.02) -> np.ndarray:
+        """Apply random translation to simulate hand movement."""
+        translation = np.random.uniform(-translation_range, translation_range, 3)
+        return points + translation
+
+    @staticmethod
+    def augment(raw_landmarks: np.ndarray, multiplier: int = 12) -> list[np.ndarray]:
         """Generate augmented versions of raw 21-point hand landmarks.
 
         Args:
@@ -304,21 +321,90 @@ class LandmarkAugmenter:
         """
         augmented = [raw_landmarks.copy()]
 
-        for _ in range(multiplier - 1):
+        for i in range(multiplier - 1):
             sample = raw_landmarks.copy()
 
+            # Rotate 80% of samples
             if np.random.random() > 0.2:
-                sample = LandmarkAugmenter._rotate_points_around_wrist(sample, max_angle=15.0)
+                sample = LandmarkAugmenter._rotate_points_around_wrist(sample, max_angle=20.0)
 
-            sample = LandmarkAugmenter._add_jitter(sample, noise_level=0.003)
+            # Scale 60% of samples
+            if np.random.random() > 0.4:
+                sample = LandmarkAugmenter._apply_scale(sample, scale_range=(0.9, 1.1))
+
+            # Translate 40% of samples
+            if np.random.random() > 0.6:
+                sample = LandmarkAugmenter._apply_translation(sample, translation_range=0.02)
+
+            # Always add jitter
+            sample = LandmarkAugmenter._add_jitter(sample, noise_level=0.005)
 
             augmented.append(sample)
 
         return augmented
 
 
+def palm_orientation(landmarks: np.ndarray) -> np.ndarray:
+    """Calculate palm orientation vector (3 values).
+    
+    Uses normal vector to plane defined by wrist, index MCP, and pinky MCP.
+    """
+    wrist = landmarks[0]
+    index_mcp = landmarks[5]
+    pinky_mcp = landmarks[17]
+    
+    vec1 = index_mcp - wrist
+    vec2 = pinky_mcp - wrist
+    
+    normal = np.cross(vec1, vec2)
+    norm = np.linalg.norm(normal) + 1e-7
+    normalized_normal = normal / norm
+    
+    return normalized_normal
+
+
+def finger_spread(landmarks: np.ndarray) -> float:
+    """Calculate overall finger spread/splay metric.
+    
+    Returns average angle between adjacent fingers.
+    """
+    wrist = landmarks[0]
+    finger_tips = [4, 8, 12, 16, 20]
+    
+    angles = []
+    for i in range(len(finger_tips) - 1):
+        vec1 = landmarks[finger_tips[i]] - wrist
+        vec2 = landmarks[finger_tips[i + 1]] - wrist
+        
+        norm1 = np.linalg.norm(vec1) + 1e-7
+        norm2 = np.linalg.norm(vec2) + 1e-7
+        
+        cos_angle = np.dot(vec1, vec2) / (norm1 * norm2)
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle = np.arccos(cos_angle)
+        angles.append(angle)
+    
+    return float(np.mean(angles))
+
+
+def hand_compactness(landmarks: np.ndarray) -> float:
+    """Measure how compact/open the hand is.
+    
+    Returns ratio of bounding box volume to palm size.
+    """
+    min_coords = np.min(landmarks, axis=0)
+    max_coords = np.max(landmarks, axis=0)
+    bbox_size = np.prod(max_coords - min_coords)
+    
+    wrist = landmarks[0]
+    middle_mcp = landmarks[9]
+    palm_size = euclidean(wrist, middle_mcp) ** 3 + 1e-7
+    
+    return float(bbox_size / palm_size)
+
+
 def extract_96_features(landmarks: np.ndarray) -> np.ndarray:
-    """Extract all 96 geometric features from normalized landmarks.
+    """Extract all 101 geometric features from normalized landmarks.
 
     Pipeline:
     1. Normalized positions (63): xyz of 21 normalized points
@@ -329,6 +415,11 @@ def extract_96_features(landmarks: np.ndarray) -> np.ndarray:
     6. Tip-to-palm-center distances (5)
     7. Index direction (1)
     8. Thumb spread (3)
+    9. Palm orientation (3): normal vector to palm plane
+    10. Finger spread (1): overall splay metric
+    11. Hand compactness (1): open/closed hand metric
+    
+    Total: 101 features (63+5+5+10+4+5+1+3+3+1+1)
     """
     norm = normalize_landmarks(landmarks)
 
@@ -349,6 +440,12 @@ def extract_96_features(landmarks: np.ndarray) -> np.ndarray:
     features.append(index_direction(norm))
 
     features.extend(thumb_spread(norm))
+    
+    features.extend(palm_orientation(norm))
+    
+    features.append(finger_spread(norm))
+    
+    features.append(hand_compactness(norm))
 
     return np.array(features, dtype=np.float32)
 

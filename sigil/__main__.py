@@ -194,15 +194,16 @@ def _cmd_record(args: argparse.Namespace) -> None:
 
 
 def _cmd_train(args: argparse.Namespace) -> None:
-    from sigil.trainer import retrain, train_dynamic, train_instant
+    from sigil.trainer import retrain, train_instant
 
     try:
         if args.type == "all":
-            retrain(epochs=args.epochs, batch_size=args.batch)
+            retrain()
         elif args.type == "instant":
-            train_instant(epochs=args.epochs, batch_size=args.batch)
+            train_instant()
         elif args.type == "dynamic":
-            train_dynamic()
+            print("Dynamic model training not yet implemented", file=sys.stderr)
+            sys.exit(1)
     except ImportError as exc:
         print(f"Training dependency missing: {exc}", file=sys.stderr)
         print("Install with: pip install sigil[train]", file=sys.stderr)

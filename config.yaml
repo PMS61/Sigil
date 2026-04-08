@@ -29,9 +29,9 @@ tracking:
   zoom: 1.0
 
 execution:
-  confirm_frames: 3
-  blanking_ms: 1200
-  confidence_threshold: 0.75
+  confirm_frames: 2
+  blanking_ms: 1000
+  confidence_threshold: 0.70
 
 recording:
   hotkey: "Super+Alt+G"

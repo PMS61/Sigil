@@ -389,7 +389,7 @@ class GradualClassifier(BaseClassifier):
 # 3.  Geometric Classifier (§5.2 – custom landmark-based pose classification)
 # ═════════════════════════════════════════════════════════════════════════════
 class GeometricClassifier(BaseClassifier):
-    """Uses Random Forest to classify 96-dimensional geometric features.
+    """Uses Random Forest to classify 101-dimensional geometric features.
 
     Loads .pkl artifacts from MODELS_DIR trained via the landmark architecture.
     Runs on the SAME landmarks from the tracker — zero extra detection cost.
@@ -443,6 +443,11 @@ class GeometricClassifier(BaseClassifier):
                 idx = np.argmax(probs)
                 label = self._class_names[idx]
                 score = float(probs[idx])
+                
+                # Improved confidence: consider second-best prediction
+                sorted_probs = np.sort(probs)[::-1]
+                confidence_margin = sorted_probs[0] - sorted_probs[1] if len(sorted_probs) > 1 else sorted_probs[0]
+                adjusted_score = score * (1 + confidence_margin * 0.3)
 
                 if label == "None":
                     continue
@@ -455,7 +460,7 @@ class GeometricClassifier(BaseClassifier):
                             ClassificationResult(
                                 gesture_name=mapping.name,
                                 gesture_type="instant",
-                                confidence=score,
+                                confidence=min(adjusted_score, 1.0),
                                 position=pos,
                                 hand=hand.handedness,
                                 raw_label=f"geometric:{label}",
@@ -595,9 +600,9 @@ class GestureClassifier:
     """
 
     # Minimum confidence for geometric to override builtin
-    GEOMETRIC_MIN_CONFIDENCE = 0.60
+    GEOMETRIC_MIN_CONFIDENCE = 0.55
     # Buffer size for smoothing
-    SMOOTHING_BUFFER_SIZE = 7
+    SMOOTHING_BUFFER_SIZE = 9
 
     def __init__(
         self,

@@ -1165,6 +1165,9 @@ class SigilWindow(Adw.ApplicationWindow):
                     train_instant()
                 elif train_type == "all":
                     retrain()
+                elif train_type == "dynamic":
+                    # Sequential/dynamic training not yet implemented
+                    raise NotImplementedError("Sequential model training is not yet implemented")
                 GLib.idle_add(self._on_training_done, train_type, None)  # type: ignore[name-defined]
             except Exception as e:
                 GLib.idle_add(self._on_training_done, train_type, str(e))  # type: ignore[name-defined]
