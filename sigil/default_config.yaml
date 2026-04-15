@@ -16,22 +16,22 @@ overlay_settings:
 
 tracking:
   num_hands: 2
-  min_detection_confidence: 0.7
-  min_tracking_confidence: 0.6
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
   model_asset_path: gesture_recognizer.task
   camera_id: 0
   frame_width: 1280
   frame_height: 720
-  target_fps: 10
-  low_fps_fallback: 8
-  inference_scale: 0.4
-  instant_inference_interval_ms: 120
+  target_fps: 30
+  low_fps_fallback: 15
+  inference_scale: 0.6
+  instant_inference_interval_ms: 50
   zoom: 1.0
 
 execution:
-  confirm_frames: 2
-  blanking_ms: 1200
-  confidence_threshold: 0.65
+  confirm_frames: 1
+  blanking_ms: 800
+  confidence_threshold: 0.50
 
 recording:
   hotkey: "Super+Alt+G"

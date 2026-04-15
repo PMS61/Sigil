@@ -125,45 +125,81 @@ class Executor:
 
     def _execution_worker(self) -> None:
         """Background thread that consumes the action queue."""
+        logger.info("Executor worker thread started, entering main loop")
         while self._running:
-            # 1. Process discrete actions (priority)
             try:
-                while not self._action_queue.empty():
-                    action = self._action_queue.get_nowait()
-                    self._dispatch_immediate(action)
-                    self._action_queue.task_done()
-            except queue.Empty:
-                pass
+                # 1. Process discrete actions (priority)
+                try:
+                    while not self._action_queue.empty():
+                        action = self._action_queue.get_nowait()
+                        logger.info("Worker: dequeued action: %s", action)
+                        result = self._dispatch_immediate(action)
+                        logger.info("Worker: _dispatch_immediate returned %s for: %s", result, action[:60])
+                        self._action_queue.task_done()
+                except queue.Empty:
+                    pass
 
-            # 2. Process latest continuous actions
-            with self._buffer_lock:
-                to_process = list(self._continuous_buffer.items())
-                self._continuous_buffer.clear()
+                # 2. Process latest continuous actions
+                with self._buffer_lock:
+                    to_process = list(self._continuous_buffer.items())
+                    self._continuous_buffer.clear()
 
-            for _name, action in to_process:
-                self._dispatch_immediate(action)
+                for _name, action in to_process:
+                    logger.info("Worker: processing continuous: %s", action)
+                    result = self._dispatch_immediate(action)
+                    logger.info("Worker: continuous result: %s", result)
 
-            # Throttle the loop slightly to prevent CPU spinning
-            time.sleep(0.002)
+                # Throttle the loop slightly to prevent CPU spinning
+                time.sleep(0.002)
+            except Exception:
+                logger.exception("Unhandled error in executor worker thread")
+                # Don't crash the thread — keep running
+                time.sleep(0.01)
 
     def _dispatch_immediate(self, action: str) -> bool:
         """The actual low-level execution call (blocking in this thread)."""
         # ── Smart Routing ───────────────────────────────────────────────────
-        # If the action contains shell characters (|, &, $, etc.), 
+        # If the action contains shell characters (|, &, $, ;, etc.),
         # we MUST use the CLI fallback which supports shell execution.
+        # Also, 'dispatch exec' actions that wrap external tools (ydotool,
+        # playerctl, etc.) are more reliable via CLI since the socket path
+        # can silently fail when hyprland forks the subprocess.
         shell_chars = ["|", "&", "$", ";", ">", "<", "(", ")"]
         is_complex = any(c in action for c in shell_chars)
-        
-        if self._use_socket and self._socket_path and not is_complex:
+
+        # Force CLI for actions involving external command executors
+        force_cli = "dispatch exec" in action
+
+        use_socket = self._use_socket and self._socket_path and not is_complex and not force_cli
+
+        logger.info(
+            "_dispatch_immediate: action='%s', use_socket=%s, use_cli=%s, force_cli=%s, is_complex=%s",
+            action,
+            use_socket,
+            self._use_cli,
+            force_cli,
+            is_complex,
+        )
+
+        if use_socket:
             try:
-                return self._execute_socket_sync(action)
-            except OSError:
+                result = self._execute_socket_sync(action)
+                logger.info("_execute_socket_sync result: %s", result)
+                return result
+            except OSError as e:
+                logger.warning(
+                    "Socket execution failed (%s) – disabling socket, using CLI fallback",
+                    e,
+                )
                 self._use_socket = False
                 self._socket_path = None
 
         if self._use_cli:
-            return self._execute_cli_sync(action)
-        
+            result = self._execute_cli_sync(action)
+            logger.info("_execute_cli_sync result: %s", result)
+            return result
+
+        logger.warning("No executor available – skipping: %s", action)
         return False
 
     def close(self) -> None:
@@ -302,9 +338,23 @@ class Executor:
 
     async def _execute_cli(self, action: str) -> bool:
         """Execute via subprocess (higher latency, ~10-20 ms)."""
-        # Action is a full shell command like "hyprctl dispatch killactive"
-        proc = await asyncio.create_subprocess_shell(
-            action,
+        # Strip 'hyprctl ' prefix and invoke hyprctl directly.
+        cmd = action.strip()
+        if cmd.startswith("hyprctl "):
+            cmd = cmd[len("hyprctl "):]
+
+        hyprctl_path = shutil.which("hyprctl")
+        if hyprctl_path is None:
+            logger.error("hyprctl not found in PATH – cannot execute: %s", action)
+            return False
+
+        parts = cmd.split(maxsplit=1)
+        if parts[0] != "dispatch":
+            logger.error("Expected 'dispatch' command, got: %s", action)
+            return False
+
+        proc = await asyncio.create_subprocess_exec(
+            hyprctl_path, *parts,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -327,11 +377,19 @@ class Executor:
         then queues for execution. Returns True if successfully queued.
         """
         if not action:
+            logger.warning("execute_sync called with empty action")
             return False
 
         action_str = self._interpolate_action(action, result)
         is_continuous = result.continuous if result else False
         gesture_name = result.gesture_name if result else "unknown"
+
+        logger.info(
+            "execute_sync: gesture=%s, action=%s, continuous=%s",
+            gesture_name,
+            action_str,
+            is_continuous,
+        )
 
         if is_continuous:
             with self._buffer_lock:
@@ -362,18 +420,52 @@ class Executor:
 
     def _execute_cli_sync(self, action: str) -> bool:
         """Execute via subprocess.run (blocking)."""
-        result = subprocess.run(
-            action,
-            shell=True,
-            capture_output=True,
-            timeout=5,
-        )
+        # Strip 'hyprctl ' prefix and invoke hyprctl directly.
+        cmd = action.strip()
+        if cmd.startswith("hyprctl "):
+            cmd = cmd[len("hyprctl "):]
+
+        # Find hyprctl binary
+        hyprctl_bin = shutil.which("hyprctl")
+        if hyprctl_bin is None:
+            logger.error("hyprctl not found in PATH – cannot execute: %s", action)
+            return False
+
+        # Parse the command
+        parts = cmd.split(maxsplit=1)
+        if parts[0] != "dispatch":
+            logger.error("Expected 'dispatch' command, got: %s", action)
+            return False
+
+        rest = parts[1] if len(parts) > 1 else ""
+
+        # For 'dispatch exec' actions, the remainder is a shell command that
+        # may contain pipes, variables, etc. We MUST pass it through a shell
+        # so that hyprctl receives the full exec argument intact.
+        # For direct dispatchers (killactive, fullscreen, etc.), we call
+        # hyprctl directly for lower latency.
+        if rest.startswith("exec "):
+            # Use shell mode: hyprctl dispatch exec 'shell command'
+            result = subprocess.run(
+                f"{hyprctl_bin} dispatch {rest}",
+                shell=True,
+                capture_output=True,
+                timeout=10,
+            )
+        else:
+            # Direct dispatcher: hyprctl dispatch killactive
+            result = subprocess.run(
+                [hyprctl_bin, "dispatch"] + rest.split(),
+                capture_output=True,
+                timeout=10,
+            )
+
         if result.returncode != 0:
             logger.error(
                 "CLI execution failed (rc=%d): %s\nstderr: %s",
                 result.returncode,
                 action,
-                result.stderr.decode(),
+                result.stderr.decode() if hasattr(result, 'stderr') else "",
             )
             return False
         logger.debug("CLI output (sync): %s", result.stdout.decode().strip())

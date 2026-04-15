@@ -1,0 +1,72 @@
+\contentsline {section}{\numberline {1}Executive Summary}{6}{section.1}%
+\contentsline {section}{\numberline {2}Introduction}{6}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Background and Motivation}{6}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Problem Statement}{6}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Project Objectives}{7}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Scope and Deliverables}{7}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Projected Impact}{8}{subsection.2.5}%
+\contentsline {section}{\numberline {3}Literature Review}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Gesture Recognition Background}{8}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Gesture Recognition Approaches}{8}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Command Mapping Mechanisms}{9}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Gap Analysis}{9}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Sigil's Novel Contributions}{9}{subsection.3.5}%
+\contentsline {section}{\numberline {4}Requirement Analysis}{9}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Functional Requirements}{9}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Non-Functional Requirements}{10}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}System Requirements}{11}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Dataset Requirements}{11}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Constraints and Assumptions}{11}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Summary of Key Dependencies}{12}{subsection.4.6}%
+\contentsline {section}{\numberline {5}System Architecture and Methodology}{12}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Overall System Architecture}{12}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Module 1: Camera Input and Hand Tracking}{13}{subsection.5.2}%
+\contentsline {subsubsection}{\numberline {5.2.1}Camera Input Layer}{13}{subsubsection.5.2.1}%
+\contentsline {subsubsection}{\numberline {5.2.2}Hand Tracking Engine}{13}{subsubsection.5.2.2}%
+\contentsline {subsection}{\numberline {5.3}Module 2: Gesture Classification}{14}{subsection.5.3}%
+\contentsline {subsubsection}{\numberline {5.3.1}Instant Gesture Classifier}{14}{subsubsection.5.3.1}%
+\contentsline {subsubsection}{\numberline {5.3.2}Gradual Gesture Classifier}{14}{subsubsection.5.3.2}%
+\contentsline {subsubsection}{\numberline {5.3.3}Sequential Gesture Classifier}{15}{subsubsection.5.3.3}%
+\contentsline {subsection}{\numberline {5.4}Module 3: Profile Management and Command Execution}{15}{subsection.5.4}%
+\contentsline {subsubsection}{\numberline {5.4.1}Profile System}{15}{subsubsection.5.4.1}%
+\contentsline {subsubsection}{\numberline {5.4.2}Priority and Conflict Resolution}{16}{subsubsection.5.4.2}%
+\contentsline {subsection}{\numberline {5.5}Module 4: Recording and Training Module}{16}{subsection.5.5}%
+\contentsline {subsubsection}{\numberline {5.5.1}Recording Mode}{16}{subsubsection.5.5.1}%
+\contentsline {subsubsection}{\numberline {5.5.2}Training Pipeline}{16}{subsubsection.5.5.2}%
+\contentsline {subsection}{\numberline {5.6}Module 5: Integration, Deployment, and Observability}{17}{subsection.5.6}%
+\contentsline {subsubsection}{\numberline {5.6.1}Integration Layer}{17}{subsubsection.5.6.1}%
+\contentsline {subsubsection}{\numberline {5.6.2}Observability}{17}{subsubsection.5.6.2}%
+\contentsline {subsubsection}{\numberline {5.6.3}Deployment}{17}{subsubsection.5.6.3}%
+\contentsline {subsection}{\numberline {5.7}Methodology for Evaluation and Reproducibility}{17}{subsection.5.7}%
+\contentsline {section}{\numberline {6}Implementation Details}{18}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Technology Stack and Runtime Layout}{18}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Core Implementation Details}{19}{subsection.6.2}%
+\contentsline {subsubsection}{\numberline {6.2.1}Tracker Module (tracker.py)}{19}{subsubsection.6.2.1}%
+\contentsline {subsubsection}{\numberline {6.2.2}Classifier Module (classifier.py)}{19}{subsubsection.6.2.2}%
+\contentsline {subsubsection}{\numberline {6.2.3}Executor Module (executor.py)}{20}{subsubsection.6.2.3}%
+\contentsline {subsection}{\numberline {6.3}Representative Code Snippets}{21}{subsection.6.3}%
+\contentsline {subsubsection}{\numberline {6.3.1}Data Augmentation (trainer.py)}{21}{subsubsection.6.3.1}%
+\contentsline {subsubsection}{\numberline {6.3.2}Temporal Smoothing}{22}{subsubsection.6.3.2}%
+\contentsline {subsubsection}{\numberline {6.3.3}Profile Auto-Detection}{22}{subsubsection.6.3.3}%
+\contentsline {subsection}{\numberline {6.4}Testing, CI/CD, and Reproducibility}{23}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.5}Deployment and Operations}{23}{subsection.6.5}%
+\contentsline {subsection}{\numberline {6.6}Notes on Maintainability and Extensibility}{24}{subsection.6.6}%
+\contentsline {section}{\numberline {7}Experimental Results}{24}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Dataset Overview}{24}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}System Efficiency and Performance Metrics}{25}{subsection.7.2}%
+\contentsline {subsubsection}{\numberline {7.2.1}Quantitative Performance Analysis}{25}{subsubsection.7.2.1}%
+\contentsline {subsubsection}{\numberline {7.2.2}Module-Level Performance}{25}{subsubsection.7.2.2}%
+\contentsline {subsection}{\numberline {7.3}User Study and Qualitative Insights}{26}{subsection.7.3}%
+\contentsline {subsubsection}{\numberline {7.3.1}User Experience Findings}{26}{subsubsection.7.3.1}%
+\contentsline {subsection}{\numberline {7.4}Market Relevance and Deployment Potential}{27}{subsection.7.4}%
+\contentsline {section}{\numberline {8}Discussion and Implications}{27}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Technical Impact and Practical Applications}{27}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Limitations}{28}{subsection.8.2}%
+\contentsline {subsubsection}{\numberline {8.2.1}Technical Limitations}{28}{subsubsection.8.2.1}%
+\contentsline {subsubsection}{\numberline {8.2.2}Usability Limitations}{29}{subsubsection.8.2.2}%
+\contentsline {subsubsection}{\numberline {8.2.3}Scope Limitations}{29}{subsubsection.8.2.3}%
+\contentsline {section}{\numberline {9}Challenges and Solutions}{29}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Technical Challenges}{29}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Usability Challenges}{30}{subsection.9.2}%
+\contentsline {section}{\numberline {10}Future Work}{30}{section.10}%
+\contentsline {section}{\numberline {11}Conclusion}{31}{section.11}%

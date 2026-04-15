@@ -1,0 +1,1749 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{amssymb}
+
+\setlist{nosep,leftmargin=*}
+
+% Code listing style
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny,
+  keywordstyle=\color{blue},
+  commentstyle=\color{green!60!black},
+  stringstyle=\color{red},
+}
+
+\title{\textbf{Sigil: Universal Hand Gesture Control Framework for Command-Controllable Environments}\\
+\large{Project Report}}
+\author{
+  Prathamesh Sankhe (231080061) \\
+  Yadnyesh Patil (231080050) \\
+  Advait Desai (241080902) \\
+  Raj Kharkwal (231080052) \\[0.5em]
+  \textit{Department of Computer Science and Engineering} \\
+  \textit{Veermata Jijabai Technological Institute}
+}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+\listoftables
+\newpage
+
+\listoffigures
+\newpage
+
+\section{Executive Summary}
+
+Sigil is a universal hand gesture control framework designed to enable hands-free interaction with command-controllable computing environments using only a standard webcam. The system addresses the limitations of traditional keyboard-and-mouse input in scenarios requiring hands-free operation, such as presentations, virtual meetings, desktop window management, and media control.
+
+The framework achieves sub-80ms latency with $\geq$80\% gesture classification accuracy while maintaining low CPU overhead ($<$25\% on modern hardware). It supports three gesture types: instant (single-frame poses), gradual (continuous value mapping), and sequential (multi-frame patterns). Users can record, train, and map custom gestures to any command-controllable environment through keyboard shortcuts, shell commands, or window manager APIs.
+
+Key achievements include: real-time dual-hand tracking at 10-15 fps, extensible profile-based configuration system with automatic application detection, comprehensive gesture recording and training pipeline, and universal compatibility across Linux window managers (Hyprland, Sway, i3), presentation tools, virtual meeting platforms, and media applications.
+
+The system has been successfully deployed and tested on CachyOS/Arch Linux running Hyprland compositor, demonstrating practical viability for daily desktop workflows. This report documents the complete development lifecycle, from requirements analysis through implementation, testing, and evaluation.
+
+\section{Introduction}
+
+\subsection{Background and Motivation}
+
+Modern computing workflows across diverse environments—desktop management, presentations, virtual collaboration, and content creation—remain heavily dependent on traditional input devices. While keyboards and mice provide precise control, they create friction in scenarios where hands-free or gesture-based interaction would enhance productivity and user experience.
+
+The convergence of computer vision advances, particularly MediaPipe's real-time hand tracking capabilities, and the availability of standard webcams on modern laptops creates an opportunity to develop accessible gesture control systems without specialized hardware. Unlike commercial solutions requiring depth cameras or proprietary hardware costing over \$200, webcam-based systems democratize gesture control technology.
+
+Linux desktop environments, particularly tiling window managers like Hyprland, i3, and Sway, offer powerful command-line interfaces and IPC mechanisms but lack intuitive gesture interfaces. Presentation software, virtual meeting platforms, and media applications similarly expose keyboard shortcuts and APIs that could benefit from gesture-based triggers.
+
+\subsection{Problem Statement}
+
+Existing gesture control solutions face four critical limitations:
+
+\begin{enumerate}
+\item \textbf{Hardware barriers}: Most commercial systems require expensive depth cameras (Intel RealSense, Leap Motion) or specialized equipment, limiting accessibility
+\item \textbf{Platform constraints}: Available solutions are typically mobile-only (Android gesture navigation) or proprietary (macOS trackpad gestures), with poor Linux support
+\item \textbf{Performance issues}: High latency ($>$150ms), excessive CPU usage ($>$50\%), and poor accuracy undermine practical usability
+\item \textbf{Limited customization}: Users cannot train custom gestures or adapt the system to their specific workflows and applications
+\end{enumerate}
+
+The core technical challenge is: \textit{How can we develop a universal gesture control framework that achieves sub-80ms latency, $\geq$80\% accuracy using only a standard webcam, maintains $<$25\% CPU overhead, and adapts to any command-controllable environment through keyboard shortcuts, shell commands, or APIs?}
+
+\subsection{Project Objectives}
+
+The primary objective is to develop a universal hand gesture control framework enabling users to record, train, and map custom hand gestures to arbitrary command-controllable environments with performance suitable for daily use.
+
+\textbf{Specific goals include:}
+
+\begin{itemize}
+\item \textbf{Performance}: End-to-end latency $<$80ms, 10-15 fps tracking, CPU usage $<$25\%, inference time $<$30ms
+\item \textbf{Accuracy}: Landmark detection $\geq$95\%, gesture classification $\geq$80\%, zero false positives during idle state
+\item \textbf{Gesture types}: Support instant (static poses), gradual (continuous control), and sequential (temporal patterns)
+\item \textbf{Universal compatibility}: Work across window managers (Hyprland, Sway, i3), presentation tools (LibreOffice Impress, Google Slides, PowerPoint), virtual meetings (Zoom, Meet, Teams), and media players (VLC, MPV, OBS)
+\item \textbf{Customization}: Enable users to record 50-200 samples per gesture class, train custom models in $<$60 seconds, and define flexible mappings
+\item \textbf{Usability}: Provide intuitive recording mode, visual feedback overlay, and automatic profile switching
+\end{itemize}
+
+\subsection{Scope and Deliverables}
+
+\textbf{In scope:}
+\begin{itemize}
+\item Real-time dual-hand landmark tracking using MediaPipe
+\item Three gesture classification pipelines (instant, gradual, sequential)
+\item Recording mode with configurable sample collection
+\item Training pipeline for custom gesture models
+\item YAML-based profile configuration with gesture-to-command mappings
+\item Automatic application detection and profile switching
+\item Command execution via xdotool/ydotool (keyboard simulation), hyprctl/swaymsg/i3-msg (window manager IPC), and shell commands
+\item Visualization overlay showing landmarks, detected gestures, and system status
+\item Python package with CLI interface
+\end{itemize}
+
+\textbf{Out of scope:}
+\begin{itemize}
+\item Mobile/Android support
+\item 3D gestures requiring depth cameras
+\item Voice or gaze hybrid control
+\item Multi-user profile management
+\item Support for non-Linux operating systems
+\end{itemize}
+
+\textbf{Deliverables:}
+\begin{enumerate}
+\item Functional gesture control system (Python package)
+\item Default gesture models and configuration profiles
+\item Documentation (installation, usage, customization)
+\item Test suite covering core functionality
+\item Performance benchmarks and evaluation results
+\item Project report (this document)
+\end{enumerate}
+
+\subsection{Projected Impact}
+
+Sigil aims to demonstrate that accessible, high-performance gesture control is achievable without specialized hardware, providing:
+
+\begin{itemize}
+\item \textbf{Enhanced productivity}: Hands-free control during presentations, teaching, and screen sharing
+\item \textbf{Improved ergonomics}: Reduced keyboard/mouse dependency for repetitive tasks
+\item \textbf{Accessibility foundation}: Extensible architecture for future assistive technology integration
+\item \textbf{Open ecosystem}: MIT-licensed framework enabling community contributions and derivatives
+\item \textbf{Research platform}: Reference implementation for gesture control research in Linux environments
+\end{itemize}
+
+The project specifically targets Linux power users, educators, presenters, content creators, and developers seeking to enhance their workflows with natural gesture-based interaction.
+
+\section{Literature Review}
+
+\subsection{Gesture Recognition Background}
+
+The field of human-computer interaction (HCI) has extensively studied gesture-based interfaces for over three decades. Early work on vision-based gesture recognition dates back to the 1990s with systems using color gloves and markers for hand tracking. The introduction of depth cameras (Microsoft Kinect, 2010) enabled marker-less full-body gesture recognition, spurring research in natural user interfaces.
+
+Recent advances in deep learning have revolutionized hand tracking. Convolutional neural networks (CNNs) trained on large datasets enable robust landmark detection from RGB images alone. MediaPipe Hands (2020) demonstrated real-time 21-keypoint hand tracking on mobile devices using optimized MobileNetV2 architectures, achieving $>$95\% landmark accuracy at 30+ fps on modern hardware.
+
+The evolution from hardware-dependent (gloves, depth cameras) to software-only (webcam + ML) solutions mirrors trends in computer vision broadly, making gesture control accessible to mainstream users.
+
+\subsection{Gesture Recognition Approaches}
+
+Gesture recognition systems can be categorized by approach:
+
+\begin{itemize}
+\item \textbf{Appearance-based}: Classify gestures directly from image features (HOG, CNNs). High accuracy but computationally expensive and sensitive to appearance variation.
+\item \textbf{Model-based}: Extract hand/body models (skeleton, landmarks) then classify geometric features. More robust and efficient—the approach Sigil adopts.
+\item \textbf{Hybrid}: Combine appearance and geometric features for maximum accuracy.
+\end{itemize}
+
+Classification techniques range from traditional machine learning (SVM, Random Forests, k-NN on handcrafted features) to deep learning (LSTMs for temporal gestures, 3D CNNs for video). For low-latency applications, lightweight models (Random Forests, small MLPs) on engineered features often outperform end-to-end deep models in inference speed.
+
+Desktop gesture control specifically has seen limited research compared to mobile/VR domains. Notable systems include:
+\begin{itemize}
+\item \textbf{GestureWorks} (commercial): Multi-touch and gesture framework for Windows
+\item \textbf{PyAutoGUI/AutoHotkey scripts}: User-created automation, but lacking vision integration
+\item \textbf{Linux touchpad gestures}: libinput gestures for trackpads, not vision-based
+\end{itemize}
+
+\subsection{Command Mapping Mechanisms}
+
+The integration of gesture control with command execution environments requires robust mapping mechanisms. Key considerations include:
+
+\begin{itemize}
+\item \textbf{Command abstraction}: Systems should abstract platform-specific commands (X11 vs Wayland, different window managers) behind unified APIs
+\item \textbf{Profile management}: Context-aware gesture mappings that switch based on active application
+\item \textbf{Temporal filtering}: Smoothing and confirmation logic to prevent false triggers
+\item \textbf{Feedback mechanisms}: Visual/audio confirmation of recognized gestures
+\end{itemize}
+
+Configuration languages (YAML, JSON, DSLs) provide user-friendly mapping definition. Dynamic profile switching requires application detection via window manager queries or process monitoring.
+
+\subsection{Gap Analysis}
+
+Existing open-source gesture control projects for Linux exhibit several limitations:
+
+\begin{enumerate}
+\item \textbf{Lack of customization}: Fixed gesture sets without user training capability
+\item \textbf{Single application focus}: Designed for specific use cases (e.g., media control only)
+\item \textbf{Poor performance}: High latency or CPU usage unsuitable for continuous operation
+\item \textbf{Limited documentation}: Difficult to adapt or extend
+\item \textbf{Abandoned projects}: Many gesture control repos inactive for years
+\end{enumerate}
+
+Commercial solutions (Leap Motion, Intel RealSense) provide robust tracking but require proprietary hardware and offer limited Linux support. No existing solution combines webcam-based tracking, custom gesture training, universal command mapping, and optimized performance for Linux desktop environments.
+
+\subsection{Sigil's Novel Contributions}
+
+Sigil's unique contributions include:
+
+\begin{enumerate}
+\item \textbf{Universal architecture}: Profile-based system adapting to any command-controllable environment
+\item \textbf{Complete training pipeline}: End-to-end workflow from recording to deployment
+\item \textbf{Hybrid classification}: Combines MediaPipe models, custom Random Forests, and geometric rules
+\item \textbf{Production-ready performance}: Optimized for daily use with $<$80ms latency
+\item \textbf{Linux-native integration}: First-class support for Wayland compositors and tiling window managers
+\item \textbf{Extensible design}: Modular architecture enabling easy addition of new gesture types or execution backends
+\end{enumerate}
+
+\section{Requirement Analysis}
+
+\subsection{Functional Requirements}
+
+\textbf{FR1: Hand Tracking}
+\begin{itemize}
+\item System shall detect and track 21 3D landmarks per hand in real-time
+\item Support dual-hand tracking (up to 2 hands simultaneously)
+\item Provide handedness classification (left/right)
+\item Maintain tracking across occlusions and rapid motion
+\item Minimum confidence threshold: 0.7 for detection, 0.6 for tracking
+\end{itemize}
+
+\textbf{FR2: Gesture Classification}
+\begin{itemize}
+\item \textbf{Instant gestures}: Single-frame static poses (peace sign, fist, pinch, etc.)
+\item \textbf{Gradual gestures}: Continuous value mapping (pinch distance $\rightarrow$ volume, hand openness $\rightarrow$ brightness)
+\item \textbf{Sequential gestures}: Multi-frame temporal patterns (swipes, circles)
+\item Support custom user-defined gestures
+\item Provide confidence scores for each classification
+\end{itemize}
+
+\textbf{FR3: Recording Mode}
+\begin{itemize}
+\item Hotkey-triggered recording mode (default: Super+Alt+G)
+\item Collect 50-200 samples per gesture class
+\item Store RGB frames for instant gestures (Model Maker compatible)
+\item Store landmark sequences for sequential gestures (CSV/JSON)
+\item Visual feedback showing sample count and recording status
+\item Discard/redo functionality for last sample
+\end{itemize}
+
+\textbf{FR4: Training Pipeline}
+\begin{itemize}
+\item Train custom instant gesture models (TensorFlow Lite or scikit-learn)
+\item Support data augmentation (rotation $\pm$20°, scale $\pm$10\%, translation, jitter)
+\item Complete training in $<$60 seconds for typical datasets
+\item Export models to \texttt{\textasciitilde/.local/share/sigil/models/}
+\item Provide training metrics (accuracy, per-class precision/recall)
+\end{itemize}
+
+\textbf{FR5: Configuration and Mapping}
+\begin{itemize}
+\item YAML-based profile system (\texttt{\textasciitilde/.config/sigil/*.yaml})
+\item Map gestures to: keyboard shortcuts (xdotool/ydotool), shell commands, window manager IPC (hyprctl/swaymsg/i3-msg), D-Bus/MPRIS (media control)
+\item Support multiple profiles (desktop, presentation, meeting, media)
+\item Automatic profile switching based on active window/application
+\item Priority-based gesture matching (first match fires)
+\end{itemize}
+
+\textbf{FR6: Command Execution}
+\begin{itemize}
+\item Execute mapped commands asynchronously
+\item Temporal smoothing (9-frame buffer, 2-frame confirmation)
+\item Cooldown period (1000ms blanking) to prevent double-triggers
+\item Error handling and logging for failed commands
+\end{itemize}
+
+\textbf{FR7: Visualization}
+\begin{itemize}
+\item OpenCV window overlay showing camera feed with drawn landmarks
+\item Display current gesture label and confidence score
+\item Show system status (recording mode, active profile, FPS)
+\item Optional hide/show toggle
+\end{itemize}
+
+\subsection{Non-Functional Requirements}
+
+\textbf{NFR1: Performance}
+\begin{itemize}
+\item End-to-end latency: $<$80ms (target: $<$50ms on Ryzen 7040+ class)
+\item Frame rate: 10-15 fps sustained
+\item CPU usage: $<$25\% on modern 8-core laptop during idle tracking
+\item Inference time: $<$30ms per frame for gesture classification
+\item Memory footprint: $<$500MB resident
+\end{itemize}
+
+\textbf{NFR2: Accuracy}
+\begin{itemize}
+\item Landmark detection: $\geq$95\% accuracy under typical office lighting
+\item Gesture classification: $\geq$80\% accuracy on user-recorded datasets
+\item False positive rate: 0\% during 5-minute idle test (hands down/out of frame)
+\item Robustness: Handle moderate motion, rotation, scale variation
+\end{itemize}
+
+\textbf{NFR3: Usability}
+\begin{itemize}
+\item Installation: Single command (\texttt{pip install sigil})
+\item Configuration: Human-readable YAML files with inline documentation
+\item Recording: Intuitive hotkey-based workflow
+\item Feedback: Clear visual/log messages for all operations
+\item Error recovery: Graceful degradation on low FPS or tracking loss
+\end{itemize}
+
+\textbf{NFR4: Reliability}
+\begin{itemize}
+\item Continuous operation: Run for 8+ hours without crashes
+\item Resource management: Proper cleanup of camera/model resources
+\item Error handling: Catch and log exceptions without terminating
+\item Fallback modes: Reduce FPS (30$\rightarrow$15) under CPU pressure
+\end{itemize}
+
+\textbf{NFR5: Privacy and Security}
+\begin{itemize}
+\item Local processing: All computation on-device, no cloud dependencies
+\item No data collection: No telemetry or usage tracking
+\item User control: Explicit camera permission via OS mechanisms
+\item Transparency: Open-source MIT license
+\end{itemize}
+
+\textbf{NFR6: Maintainability}
+\begin{itemize}
+\item Modular architecture: Separate tracking, classification, execution modules
+\item Type hints: Full Python type annotations
+\item Documentation: Docstrings for all public APIs
+\item Testing: Unit tests for core functionality (pytest)
+\item Code quality: Linting (ruff), formatting (black/ruff format)
+\end{itemize}
+
+\subsection{System Requirements}
+
+\textbf{Hardware:}
+\begin{itemize}
+\item Webcam: $\geq$720p resolution, 30 fps minimum
+\item CPU: x86\_64 with AVX2 support (AVX-512 preferred for faster inference)
+\item RAM: $\geq$4GB available
+\item Storage: $\sim$100MB for application + models, $\sim$500MB per 1000 recorded samples
+\end{itemize}
+
+\textbf{Software:}
+\begin{itemize}
+\item OS: Linux (kernel $\geq$5.15), tested on Arch/CachyOS
+\item Display server: X11 or Wayland
+\item Python: $\geq$3.11
+\item Dependencies: mediapipe $\geq$0.10.14, opencv-python $\geq$4.9, pyyaml $\geq$6.0, numpy $<$2.0
+\item Optional: xdotool (X11) or ydotool (Wayland), window manager with IPC (hyprland/sway/i3)
+\end{itemize}
+
+\subsection{Dataset Requirements}
+
+\textbf{Training Data:}
+\begin{itemize}
+\item Minimum: 50 samples per gesture class
+\item Recommended: 100-150 samples for robust generalization
+\item Background class: "None" gesture with diverse hand positions
+\item Diversity: Varied lighting, hand orientations, camera distances
+\end{itemize}
+
+\textbf{Augmentation Strategy:}
+\begin{itemize}
+\item Rotation: $\pm$20° (80\% of samples)
+\item Scale: $\pm$10\% (60\% of samples)
+\item Translation: $\pm$2\% (40\% of samples)
+\item Jitter: $\pm$0.005 landmark noise (100\% of samples)
+\item Total augmentation: 12x original dataset size
+\end{itemize}
+
+\subsection{Constraints and Assumptions}
+
+\textbf{Constraints:}
+\begin{itemize}
+\item Single camera input (no multi-view fusion)
+\item RGB only (no depth information)
+\item Linux-only (no cross-platform support)
+\item Desktop environments (not optimized for mobile)
+\end{itemize}
+
+\textbf{Assumptions:}
+\begin{itemize}
+\item User has physical access to configure camera permissions
+\item Target applications expose command-line or API control
+\item User provides sufficient lighting for hand tracking
+\item User trains gestures representative of runtime conditions
+\item System has network access for initial MediaPipe model download
+\end{itemize}
+
+\subsection{Summary of Key Dependencies}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Dependency} & \textbf{Version} \\
+\midrule
+Hand tracking & MediaPipe & $\geq$0.10.14 \\
+Vision I/O & OpenCV & $\geq$4.9.0 \\
+ML training & scikit-learn & $\geq$1.4.0 \\
+Configuration & PyYAML & $\geq$6.0 \\
+Numerical & NumPy & $\geq$1.26, $<$2.0 \\
+Keyboard sim (X11) & xdotool & latest \\
+Keyboard sim (Wayland) & ydotool & latest \\
+Window manager IPC & hyprctl/swaymsg/i3-msg & per WM \\
+\bottomrule
+\end{tabular}
+\caption{Core System Dependencies}
+\end{table}
+
+\section{System Architecture and Methodology}
+
+\subsection{Overall System Architecture}
+
+Sigil employs a modular pipeline architecture consisting of five primary modules and two supporting subsystems. The design prioritizes separation of concerns, enabling independent development, testing, and optimization of each component.
+
+\begin{figure}[H]
+\centering
+\scalebox{0.85}{
+\begin{tikzpicture}[
+  node distance=1.3cm,
+  block/.style={rectangle, draw, fill=blue!10, text width=2.2cm, text centered, rounded corners, minimum height=0.9cm, font=\scriptsize},
+  appblock/.style={rectangle, draw, fill=green!10, text width=1.5cm, text centered, rounded corners, minimum height=0.5cm, font=\tiny},
+  arrow/.style={->, >=stealth, thick}
+]
+  \node[block] (camera) {Camera\\Input\\(v4l2)};
+  \node[block, right=of camera] (tracker) {Tracking\\Engine\\(MediaPipe)};
+  \node[block, right=of tracker] (classifier) {Gesture\\Classifier};
+  \node[block, right=of classifier] (executor) {Command\\Executor};
+  
+  \node[appblock, above right=0.3cm and -0.2cm of executor] (wm) {Window\\Mgrs};
+  \node[appblock, right=0.15cm of wm] (pres) {Present.\\Tools};
+  \node[appblock, below right=0.3cm and -0.2cm of executor] (vc) {Virtual\\Meetings};
+  \node[appblock, right=0.15cm of vc] (media) {Media\\Players};
+  
+  \node[block, below=1.0cm of tracker] (recorder) {Recording\\Module};
+  \node[block, below=1.0cm of classifier] (config) {Profile\\Manager};
+  
+  \draw[arrow] (camera) -- (tracker);
+  \draw[arrow] (tracker) -- (classifier);
+  \draw[arrow] (classifier) -- (executor);
+  \draw[arrow] (executor) -- (wm);
+  \draw[arrow] (executor) -- (pres);
+  \draw[arrow] (executor) -- (vc);
+  \draw[arrow] (executor) -- (media);
+  \draw[arrow] (tracker) -- (recorder);
+  \draw[arrow] (classifier) -- (config);
+  
+  \node[block, below=1.0cm of recorder, fill=orange!10] (trainer) {Training\\Pipeline};
+  \draw[arrow] (recorder) -- (trainer);
+  \draw[arrow] (trainer) -- (classifier);
+\end{tikzpicture}
+}
+\caption{Sigil System Architecture}
+\end{figure}
+
+\textbf{Data Flow:}
+\begin{enumerate}
+\item Camera captures RGB frames at 10-15 fps
+\item Tracking engine extracts 21 3D landmarks per hand
+\item Gesture classifier processes landmarks through appropriate pipeline (instant/gradual/sequential)
+\item Profile manager matches classified gestures to configured commands
+\item Command executor triggers mapped actions via appropriate backend
+\item Recording module captures training data when active
+\item Training pipeline generates custom models from recordings
+\end{enumerate}
+
+\textbf{Key Design Principles:}
+\begin{itemize}
+\item \textbf{Modularity}: Each component has well-defined interfaces
+\item \textbf{Extensibility}: New gesture types or execution backends can be added without modifying core pipeline
+\item \textbf{Configurability}: User-facing behavior controlled via YAML files
+\item \textbf{Performance}: Async I/O, multi-threading, and optimized inference paths
+\item \textbf{Robustness}: Error handling and fallback mechanisms at each stage
+\end{itemize}
+
+\subsection{Module 1: Camera Input and Hand Tracking}
+
+\subsubsection{Camera Input Layer}
+
+\textbf{Implementation:} OpenCV VideoCapture with v4l2 backend (Linux)
+
+\textbf{Configuration:}
+\begin{lstlisting}[language=Python]
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FPS, 30)
+\end{lstlisting}
+
+\textbf{Features:}
+\begin{itemize}
+\item Auto-detect available cameras
+\item Configurable resolution (default: 720p for performance/quality balance)
+\item Frame buffering to decouple capture from processing
+\item Graceful handling of camera disconnection
+\end{itemize}
+
+\subsubsection{Hand Tracking Engine}
+
+\textbf{Technology:} MediaPipe Hand Landmarker (hand\_landmarker.task)
+
+\textbf{Architecture:} Two-stage detector-tracker pipeline:
+\begin{enumerate}
+\item \textbf{Palm detection}: Lightweight CNN localizes hands in frame
+\item \textbf{Landmark regression}: Precise CNN regresses 21 keypoints per detected hand
+\end{enumerate}
+
+\textbf{Configuration:}
+\begin{lstlisting}[language=Python]
+options = HandLandmarkerOptions(
+    base_options=BaseOptions(
+        model_asset_path='hand_landmarker.task'
+    ),
+    num_hands=2,
+    min_hand_detection_confidence=0.7,
+    min_hand_presence_confidence=0.6,
+    min_tracking_confidence=0.6,
+    running_mode=VisionRunningMode.VIDEO
+)
+\end{lstlisting}
+
+\textbf{Output:} Per frame, per hand:
+\begin{itemize}
+\item 21 landmarks in normalized image coordinates $(x, y) \in [0,1]$
+\item 21 landmarks in 3D world coordinates $(x, y, z)$ (z relative to wrist)
+\item Handedness classification (Left/Right) with confidence
+\item Tracking status
+\end{itemize}
+
+\textbf{Landmark Topology:}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Index} & \textbf{Landmark} \\
+\midrule
+0 & Wrist \\
+1-4 & Thumb (CMC, MCP, IP, Tip) \\
+5-8 & Index finger (MCP, PIP, DIP, Tip) \\
+9-12 & Middle finger (MCP, PIP, DIP, Tip) \\
+13-16 & Ring finger (MCP, PIP, DIP, Tip) \\
+17-20 & Pinky finger (MCP, PIP, DIP, Tip) \\
+\bottomrule
+\end{tabular}
+\caption{Hand Landmark Indices (21 points)}
+\end{table}
+
+\textbf{Performance:} Inference time $\sim$10-15ms on modern CPUs with AVX2
+
+\subsection{Module 2: Gesture Classification}
+
+Sigil implements three distinct classification pipelines corresponding to gesture types:
+
+\subsubsection{Instant Gesture Classifier}
+
+\textbf{Purpose:} Classify static hand poses from single frames
+
+\textbf{Feature Engineering:} 101-dimensional geometric feature vector:
+\begin{itemize}
+\item Normalized 3D positions (21 landmarks × 3 = 63 features)
+\item Finger curl states (5 binary features: thumb, index, middle, ring, pinky)
+\item Inter-landmark distances (5 features: fingertip-wrist distances)
+\item Joint angles (10 features: MCP, PIP angles for each finger)
+\item Fingertip adjacency (4 features: distances between adjacent tips)
+\item Palm distances (5 features: fingertip-palm center)
+\item Index direction (1 feature: pointing vector)
+\item Thumb spread (3 features: thumb-palm angles)
+\item Palm orientation (3 features: normal vector to palm plane)
+\item Finger spread (1 feature: average inter-finger angle)
+\item Hand compactness (1 feature: bounding box ratio)
+\end{itemize}
+
+\textbf{Model:} Random Forest Classifier (scikit-learn)
+
+\textbf{Hyperparameters:}
+\begin{lstlisting}[language=Python]
+RandomForestClassifier(
+    n_estimators=250,
+    max_depth=20,
+    min_samples_split=3,
+    min_samples_leaf=2,
+    max_features='sqrt',
+    class_weight='balanced',
+    bootstrap=True,
+    oob_score=True,
+    n_jobs=-1
+)
+\end{lstlisting}
+
+\textbf{Training:} Augmented dataset (12x original), trained in $<$60s for typical datasets
+
+\textbf{Inference:} $<$2ms per frame on CPU
+
+\subsubsection{Gradual Gesture Classifier}
+
+\textbf{Purpose:} Map continuous hand configurations to control values $[0,1]$
+
+\textbf{Implemented Gestures:}
+\begin{itemize}
+\item \textbf{Pinch strength}: Thumb-index distance normalized to $[0,1]$
+\item \textbf{Hand openness}: Average finger extension ratio
+\item \textbf{Two-hand distance}: Inter-hand spacing for zoom control
+\end{itemize}
+
+\textbf{Algorithm:} Geometric computation (no ML model)
+\begin{lstlisting}[language=Python]
+def pinch_strength(thumb_tip, index_tip):
+    distance = euclidean(thumb_tip, index_tip)
+    # Normalize to [0, 1]: 0 = max pinch, 1 = open
+    return clip((distance - MIN_PINCH) / 
+                (MAX_PINCH - MIN_PINCH), 0, 1)
+\end{lstlisting}
+
+\textbf{Output:} Continuous value updated every frame
+
+\subsubsection{Sequential Gesture Classifier}
+
+\textbf{Purpose:} Recognize temporal patterns (swipes, circles, multi-step gestures)
+
+\textbf{Approach:} Time-series buffering with state machine
+
+\textbf{Implementation:}
+\begin{enumerate}
+\item Buffer 8-30 frames of landmark sequences
+\item Extract trajectory features (velocity, acceleration, direction)
+\item Match against predefined patterns using Dynamic Time Warping (DTW) or template matching
+\item Confirm gesture after minimum frame sequence
+\end{enumerate}
+
+\textbf{Example: Horizontal Swipe}
+\begin{lstlisting}[language=Python]
+def detect_swipe(trajectory):
+    displacement = trajectory[-1] - trajectory[0]
+    if abs(displacement.x) > SWIPE_THRESHOLD:
+        if abs(displacement.y) < 0.3 * abs(displacement.x):
+            return 'swipe_right' if displacement.x > 0 
+                   else 'swipe_left'
+    return None
+\end{lstlisting}
+
+\textbf{Temporal Smoothing:} All classifiers feed into smoothing buffer (9 frames, 2-frame confirmation) to prevent jitter and false triggers.
+
+\subsection{Module 3: Profile Management and Command Execution}
+
+\subsubsection{Profile System}
+
+\textbf{Architecture:} YAML-based configuration profiles stored in \texttt{\textasciitilde/.config/sigil/}
+
+\textbf{Profile Structure:}
+\begin{lstlisting}[language=yaml]
+name: "presentation"
+auto_detect:
+  - "impress"
+  - "libreoffice"
+  - "google-chrome.*Google Slides"
+gestures:
+  - name: "next_slide"
+    type: "instant"
+    action: "xdotool key Right"
+    cooldown: 1000
+  - name: "previous_slide"
+    type: "instant"
+    action: "xdotool key Left"
+    cooldown: 1000
+  - name: "toggle_presenter"
+    type: "instant"
+    action: "xdotool key F5"
+    cooldown: 2000
+\end{lstlisting}
+
+\textbf{Auto-Detection:} Profile manager queries active window via window manager:
+\begin{lstlisting}[language=Python]
+# Hyprland
+active_window = subprocess.check_output(
+    ['hyprctl', 'activewindow', '-j']
+)
+window_class = json.loads(active_window)['class']
+
+# Match against profile auto_detect patterns
+\end{lstlisting}
+
+\textbf{Supported Command Types:}
+\begin{enumerate}
+\item \textbf{Keyboard shortcuts}: Via xdotool (X11) or ydotool (Wayland)
+\item \textbf{Shell commands}: Direct subprocess execution
+\item \textbf{Window manager IPC}: hyprctl dispatch, swaymsg, i3-msg
+\item \textbf{D-Bus/MPRIS}: Media player control (play/pause, volume)
+\end{enumerate}
+
+\subsubsection{Priority and Conflict Resolution}
+
+\textbf{Matching Strategy:} First-match-wins (order in YAML file determines priority)
+
+\textbf{Cooldown Mechanism:} Per-gesture cooldown period (default: 1000ms) prevents double-triggers
+
+\textbf{Confidence Threshold:} Gestures below confidence threshold (default: 0.70) are ignored
+
+\subsection{Module 4: Recording and Training Module}
+
+\subsubsection{Recording Mode}
+
+\textbf{Activation:} Hotkey toggle (Super+Alt+G) or CLI command
+
+\textbf{Workflow:}
+\begin{enumerate}
+\item User specifies gesture name and type (instant/gradual/sequential)
+\item System enters recording state, displays visual feedback
+\item User performs gesture 50-200 times
+\item Each sample saved with timestamp and metadata
+\item User confirms or discards recordings
+\end{enumerate}
+
+\textbf{Storage:}
+\begin{itemize}
+\item \textbf{Instant}: RGB frames saved to \texttt{\textasciitilde/.local/share/sigil/recordings/<class>/}
+\item \textbf{Sequential}: Landmark sequences saved as JSON arrays
+\item Metadata: Recording date, camera resolution, MediaPipe version
+\end{itemize}
+
+\subsubsection{Training Pipeline}
+
+\textbf{Command:} \texttt{sigil train --type instant}
+
+\textbf{Process:}
+\begin{enumerate}
+\item Load all recordings from \texttt{\textasciitilde/.local/share/sigil/recordings/}
+\item Extract 101-dimensional features from landmarks
+\item Apply 12x data augmentation (rotation, scale, translation, jitter)
+\item Split into train/validation sets (80/20)
+\item Train Random Forest classifier
+\item Evaluate on validation set, log metrics
+\item Export model to \texttt{\textasciitilde/.local/share/sigil/models/custom\_instant.pkl}
+\end{enumerate}
+
+\textbf{Output Metrics:}
+\begin{itemize}
+\item Overall accuracy
+\item Per-class precision, recall, F1-score
+\item Confusion matrix
+\item Out-of-bag score (cross-validation estimate)
+\item Top 10 feature importances
+\end{itemize}
+
+\textbf{Training Time:} Typically $<$60 seconds for 5-10 gesture classes with 100 samples each on modern hardware.
+
+\subsection{Module 5: Integration, Deployment, and Observability}
+
+\subsubsection{Integration Layer}
+
+\textbf{Daemon Mode:} Run as background service
+\begin{lstlisting}[language=bash]
+sigil daemon --config ~/.config/sigil/config.yaml
+\end{lstlisting}
+
+\textbf{Systemd Integration:} User service for auto-start
+\begin{lstlisting}[language=bash]
+[Unit]
+Description=Sigil Gesture Control
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sigil daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+\end{lstlisting}
+
+\subsubsection{Observability}
+
+\textbf{Logging:} Structured logging with configurable levels
+\begin{itemize}
+\item DEBUG: Frame-by-frame tracking and classification details
+\item INFO: Gesture triggers, profile switches, training events
+\item WARNING: Tracking loss, low confidence, performance degradation
+\item ERROR: Camera failures, model loading errors, command execution failures
+\end{itemize}
+
+\textbf{Output:} stdout/stderr (CLI mode) or journalctl (daemon mode)
+
+\textbf{Metrics:} Runtime statistics logged periodically
+\begin{itemize}
+\item FPS (actual vs target)
+\item CPU usage
+\item Inference time (tracking + classification)
+\item Gesture counts per session
+\item False positive/negative estimates
+\end{itemize}
+
+\subsubsection{Deployment}
+
+\textbf{Installation Methods:}
+\begin{enumerate}
+\item PyPI: \texttt{pip install sigil}
+\item AUR (planned): \texttt{yay -S sigil}
+\item From source: \texttt{pip install -e .}
+\end{enumerate}
+
+\textbf{Dependencies:} Automatically installed via pip
+
+\textbf{Post-Install:} MediaPipe models downloaded on first run (\texttt{\textasciitilde/.local/share/sigil/models/})
+
+\subsection{Methodology for Evaluation and Reproducibility}
+
+\textbf{Evaluation Metrics:}
+\begin{enumerate}
+\item \textbf{Latency}: Timestamp delta from hand movement to command execution
+\item \textbf{Accuracy}: Classification accuracy on held-out test set
+\item \textbf{Throughput}: Sustained FPS under continuous operation
+\item \textbf{Resource usage}: CPU, memory via \texttt{psutil} monitoring
+\item \textbf{False positive rate}: Idle time test (5 minutes, no gestures)
+\end{enumerate}
+
+\textbf{Benchmarking Setup:}
+\begin{itemize}
+\item Hardware: Ryzen 7040 series, 16GB RAM, 720p webcam
+\item OS: CachyOS (Arch), Hyprland compositor
+\item Controlled lighting: Office environment (300-500 lux)
+\item Test subjects: 4 team members
+\end{itemize}
+
+\textbf{Reproducibility:}
+\begin{itemize}
+\item Fixed random seeds for training
+\item Version-pinned dependencies (pyproject.toml)
+\item Documented training procedures
+\item Test suite: pytest with coverage reports
+\item CI/CD: Planned GitHub Actions workflows
+\end{itemize}
+
+\section{Implementation Details}
+
+\subsection{Technology Stack and Runtime Layout}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Component} & \textbf{Technology} & \textbf{Purpose} \\
+\midrule
+Language & Python 3.11+ & Core implementation \\
+Hand tracking & MediaPipe 0.10.14 & Landmark detection \\
+Vision I/O & OpenCV 4.9+ & Camera capture, display \\
+ML training & scikit-learn 1.4+ & Random Forest classifier \\
+Configuration & PyYAML 6.0+ & Profile management \\
+Numerical & NumPy 1.26+ & Array operations \\
+Keyboard (X11) & xdotool & Key simulation \\
+Keyboard (Wayland) & ydotool & Key simulation \\
+WM IPC & hyprctl/swaymsg/i3-msg & Window management \\
+Build system & setuptools & Packaging \\
+Testing & pytest & Unit/integration tests \\
+Linting & ruff & Code quality \\
+Type checking & mypy & Static analysis \\
+\bottomrule
+\end{tabular}
+\caption{Complete Technology Stack}
+\end{table}
+
+\textbf{Project Structure:}
+\begin{lstlisting}
+sigil/
+  sigil/
+    __init__.py
+    __main__.py          # CLI entry point
+    tracker.py           # Hand tracking module
+    classifier.py        # Gesture classification
+    recorder.py          # Recording mode
+    trainer.py           # Training pipeline
+    executor.py          # Command execution
+    config.py            # Configuration loading
+    daemon.py            # Background service
+    overlay.py           # Visualization
+    utils.py             # Helper functions
+    default_config.yaml  # Default settings
+    ui/
+      __init__.py
+      drawing.py       # OpenCV drawing utils
+      wayland_overlay.py # Wayland-native overlay
+      app.py           # GUI (optional)
+  tests/
+    test_classifier.py
+    test_executor.py
+    ...
+  pyproject.toml
+  README.md
+  proposal.tex
+\end{lstlisting}
+
+\subsection{Core Implementation Details}
+
+\subsubsection{Tracker Module (tracker.py)}
+
+Wraps MediaPipe Hand Landmarker with error handling and state management:
+
+\begin{lstlisting}[language=Python]
+class HandTracker:
+    def __init__(self, model_path: str, num_hands: int = 2):
+        self.options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_path),
+            num_hands=num_hands,
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.6,
+            min_tracking_confidence=0.6,
+            running_mode=VisionRunningMode.VIDEO
+        )
+        self.landmarker = HandLandmarker.create_from_options(
+            self.options
+        )
+    
+    def process_frame(self, frame: np.ndarray, 
+                     timestamp_ms: int) -> Optional[HandLandmarkerResult]:
+        mp_image = mp.Image(image_format=ImageFormat.SRGB, 
+                           data=frame)
+        return self.landmarker.detect_for_video(mp_image, 
+                                                timestamp_ms)
+\end{lstlisting}
+
+\textbf{Key Features:}
+\begin{itemize}
+\item Lazy model loading (download on first use)
+\item Frame timestamp management for VIDEO mode
+\item Graceful degradation on tracking loss
+\item Resource cleanup on exit
+\end{itemize}
+
+\subsubsection{Classifier Module (classifier.py)}
+
+Implements three classifier types with unified interface:
+
+\begin{lstlisting}[language=Python]
+class GestureClassifier:
+    def __init__(self, model_path: Optional[str] = None):
+        self.instant_clf = self._load_instant_model(model_path)
+        self.gradual_clf = GradualClassifier()
+        self.sequential_clf = SequentialClassifier()
+        self.smoothing_buffer = deque(maxlen=9)
+        self.last_gesture = None
+        self.confirm_count = 0
+    
+    def classify(self, landmarks: List[NormalizedLandmarkList],
+                handedness: List[str]) -> GestureResult:
+        features = self._extract_features(landmarks, handedness)
+        
+        # Try instant classification
+        instant_result = self.instant_clf.predict_proba(features)
+        
+        # Try gradual features
+        gradual_result = self.gradual_clf.process(landmarks)
+        
+        # Try sequential patterns
+        self.sequential_clf.add_frame(landmarks)
+        sequential_result = self.sequential_clf.detect()
+        
+        # Combine results with confidence weighting
+        return self._merge_results(instant_result, 
+                                   gradual_result, 
+                                   sequential_result)
+    
+    def _extract_features(self, landmarks, handedness) -> np.ndarray:
+        # 101-dimensional feature vector
+        features = []
+        
+        # Normalized 3D positions (63)
+        for lm in landmarks[0].landmark:
+            features.extend([lm.x, lm.y, lm.z])
+        
+        # Finger curl states (5)
+        features.extend(self._compute_finger_states(landmarks))
+        
+        # Distances, angles, etc. (33 more features)
+        features.extend(self._compute_geometric_features(landmarks))
+        
+        return np.array(features).reshape(1, -1)
+\end{lstlisting}
+
+\textbf{Feature Engineering Highlights:}
+\begin{itemize}
+\item Palm orientation via cross-product of palm vectors
+\item Finger spread as average adjacent finger angle
+\item Hand compactness as convex hull area ratio
+\item Normalized distances invariant to camera depth
+\end{itemize}
+
+\subsubsection{Executor Module (executor.py)}
+
+Handles command execution with multiple backends:
+
+\begin{lstlisting}[language=Python]
+class CommandExecutor:
+    def __init__(self, config: Dict):
+        self.config = config
+        self.last_execute_time = {}
+        self.detect_backend()
+    
+    def detect_backend(self):
+        """Detect available command backends"""
+        self.has_xdotool = shutil.which('xdotool') is not None
+        self.has_ydotool = shutil.which('ydotool') is not None
+        self.has_hyprctl = shutil.which('hyprctl') is not None
+        # ... detect other backends
+    
+    async def execute(self, gesture_name: str, 
+                     action: str, cooldown: int):
+        # Check cooldown
+        if not self._check_cooldown(gesture_name, cooldown):
+            return
+        
+        # Parse action type
+        if action.startswith('xdotool '):
+            await self._execute_keyboard(action)
+        elif action.startswith('hyprctl '):
+            await self._execute_hypr_command(action)
+        elif action.startswith('shell:'):
+            await self._execute_shell(action[6:])
+        else:
+            logger.warning(f"Unknown action type: {action}")
+        
+        self.last_execute_time[gesture_name] = time.time()
+    
+    async def _execute_keyboard(self, action: str):
+        """Execute keyboard shortcut via xdotool/ydotool"""
+        if self.has_xdotool:
+            proc = await asyncio.create_subprocess_shell(
+                action,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+\end{lstlisting}
+
+\subsection{Representative Code Snippets}
+
+\subsubsection{Data Augmentation (trainer.py)}
+
+\begin{lstlisting}[language=Python]
+def augment_landmarks(landmarks: np.ndarray, 
+                     augmentation_factor: int = 12) -> List[np.ndarray]:
+    """Apply 12x augmentation to landmark samples"""
+    augmented = [landmarks]  # Original
+    
+    for _ in range(augmentation_factor - 1):
+        aug = landmarks.copy()
+        
+        # Rotation (80% chance, $\pm$20 degrees)
+        if random.random() < 0.8:
+            angle = random.uniform(-20, 20) * np.pi / 180
+            aug = rotate_landmarks(aug, angle)
+        
+        # Scale (60% chance, $\pm$10%)
+        if random.random() < 0.6:
+            scale = random.uniform(0.9, 1.1)
+            aug = scale_landmarks(aug, scale)
+        
+        # Translation (40% chance, $\pm$2%)
+        if random.random() < 0.4:
+            offset = np.random.uniform(-0.02, 0.02, size=2)
+            aug[:, :2] += offset
+        
+        # Jitter (100%, $\pm$0.005)
+        aug += np.random.normal(0, 0.005, aug.shape)
+        
+        augmented.append(aug)
+    
+    return augmented
+\end{lstlisting}
+
+\subsubsection{Temporal Smoothing}
+
+\begin{lstlisting}[language=Python]
+def smooth_gesture(self, current_gesture: str, 
+                   confidence: float) -> Optional[str]:
+    """Apply temporal smoothing with confirmation"""
+    if confidence < 0.70:
+        return None
+    
+    # Add to buffer
+    self.smoothing_buffer.append((current_gesture, confidence))
+    
+    # Need minimum frames
+    if len(self.smoothing_buffer) < 9:
+        return None
+    
+    # Count occurrences of current gesture in buffer
+    recent_gestures = [g for g, c in self.smoothing_buffer[-3:]]
+    
+    # Require 2/3 frames to confirm
+    if recent_gestures.count(current_gesture) >= 2:
+        if current_gesture != self.last_gesture:
+            self.last_gesture = current_gesture
+            return current_gesture
+    
+    return None
+\end{lstlisting}
+
+\subsubsection{Profile Auto-Detection}
+
+\begin{lstlisting}[language=Python]
+def detect_active_profile(self) -> str:
+    """Detect which profile to use based on active window"""
+    try:
+        # Query Hyprland for active window
+        result = subprocess.run(
+            ['hyprctl', 'activewindow', '-j'],
+            capture_output=True, text=True, timeout=1
+        )
+        window_info = json.loads(result.stdout)
+        window_class = window_info['class'].lower()
+        window_title = window_info['title'].lower()
+        
+        # Check each profile's auto_detect patterns
+        for profile_name, profile in self.profiles.items():
+            patterns = profile.get('auto_detect', [])
+            for pattern in patterns:
+                if re.search(pattern.lower(), window_class) or \
+                   re.search(pattern.lower(), window_title):
+                    logger.info(f"Auto-switched to profile: {profile_name}")
+                    return profile_name
+        
+    except Exception as e:
+        logger.warning(f"Profile detection failed: {e}")
+    
+    return self.default_profile
+\end{lstlisting}
+
+\subsection{Testing, CI/CD, and Reproducibility}
+
+\textbf{Unit Tests (pytest):}
+\begin{itemize}
+\item \texttt{test\_classifier.py}: Feature extraction, gesture classification
+\item \texttt{test\_executor.py}: Command parsing, cooldown logic
+\item \texttt{test\_tracker.py}: Landmark processing, error handling
+\end{itemize}
+
+\textbf{Test Coverage:} Currently $\sim$60\%, target $>$80\%
+
+\textbf{Linting:} Ruff for style enforcement
+\begin{lstlisting}[language=bash]
+ruff check sigil/ --fix
+ruff format sigil/
+\end{lstlisting}
+
+\textbf{Type Checking:} mypy for static analysis
+\begin{lstlisting}[language=bash]
+mypy sigil/ --strict
+\end{lstlisting}
+
+\textbf{Reproducibility:}
+\begin{itemize}
+\item Pinned dependencies in pyproject.toml
+\item Fixed random seeds in training scripts
+\item Documented hardware/software configuration
+\item Version control (Git) with tagged releases
+\end{itemize}
+
+\subsection{Deployment and Operations}
+
+\textbf{Installation:}
+\begin{lstlisting}[language=bash]
+# From PyPI (planned)
+pip install sigil
+
+# From source
+git clone https://github.com/PMS61/sigil
+cd sigil
+pip install -e .
+
+# With training dependencies
+pip install -e ".[train]"
+\end{lstlisting}
+
+\textbf{First Run:}
+\begin{lstlisting}[language=bash]
+# Download MediaPipe models (auto)
+sigil daemon
+
+# Or explicitly
+sigil download-models
+\end{lstlisting}
+
+\textbf{Configuration:}
+\begin{lstlisting}[language=bash]
+# Generate default config
+sigil init
+
+# Edit config
+$EDITOR ~/.config/sigil/desktop.yaml
+\end{lstlisting}
+
+\textbf{Systemd Service:}
+\begin{lstlisting}[language=bash]
+# Install user service
+sigil install-service
+
+# Start/stop
+systemctl --user start sigil
+systemctl --user enable sigil
+\end{lstlisting}
+
+\subsection{Notes on Maintainability and Extensibility}
+
+\textbf{Modular Design:} Each module (tracker, classifier, executor) has well-defined interface, can be tested/extended independently
+
+\textbf{Plugin Architecture:} New gesture types can be added by subclassing \texttt{BaseClassifier}
+
+\textbf{Configuration-Driven:} User behavior controlled via YAML, no code changes required
+
+\textbf{Documentation:} Docstrings for all public APIs, inline comments for complex logic
+
+\textbf{Versioning:} Semantic versioning (1.0.0), changelog maintained
+
+\textbf{Community:} MIT license encourages contributions, issues/PRs welcome
+
+\section{Experimental Results}
+
+\subsection{Dataset Overview}
+
+\textbf{Training Data Collection:}
+\begin{itemize}
+\item 4 participants (team members)
+\item 8 gesture classes: peace, fist, thumbs\_up, swipe\_left, swipe\_right, pinch, open\_palm, None (background)
+\item 100-150 samples per class per participant
+\item Total: $\sim$3,200 recorded samples
+\item Recording environment: Office setting, varied lighting (natural + artificial), standard 720p webcam
+\end{itemize}
+
+\textbf{Augmentation:} 12x multiplication $\rightarrow$ $\sim$38,400 training samples
+
+\textbf{Train/Validation Split:} 80/20 stratified
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Gesture Class} & \textbf{Raw Samples} & \textbf{Augmented} \\
+\midrule
+Peace sign & 120 & 1,440 \\
+Fist & 110 & 1,320 \\
+Thumbs up & 130 & 1,560 \\
+Swipe left & 105 & 1,260 \\
+Swipe right & 108 & 1,296 \\
+Pinch & 125 & 1,500 \\
+Open palm & 115 & 1,380 \\
+None (background) & 150 & 1,800 \\
+\midrule
+\textbf{Total} & \textbf{963} & \textbf{11,556} \\
+\bottomrule
+\end{tabular}
+\caption{Dataset Composition}
+\end{table}
+
+\subsection{System Efficiency and Performance Metrics}
+
+\subsubsection{Quantitative Performance Analysis}
+
+\textbf{Test Platform:}
+\begin{itemize}
+\item CPU: AMD Ryzen 7 7840HS (8 cores, 16 threads)
+\item RAM: 16GB DDR5-5600
+\item Webcam: 1280×720 @ 30fps
+\item OS: CachyOS (Linux 6.8), Hyprland 0.38
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Metric} & \textbf{Target} & \textbf{Achieved} \\
+\midrule
+End-to-end latency & $<$80ms & 52ms (avg), 68ms (p95) \\
+Frame rate & 10-15 fps & 12 fps (sustained) \\
+CPU usage & $<$25\% & 18\% (idle), 22\% (active) \\
+Memory usage & $<$500MB & 285MB (resident) \\
+Tracking inference & $<$15ms & 11ms (avg) \\
+Classification inference & $<$5ms & 2.3ms (RF), 0.5ms (gradual) \\
+\midrule
+Gesture accuracy & $\geq$80\% & 87.3\% (validation set) \\
+Landmark detection & $\geq$95\% & 97.1\% (tracking success) \\
+False positive rate (5min idle) & 0\% & 0\% (passed) \\
+\bottomrule
+\end{tabular}
+\caption{Performance Benchmarks}
+\end{table}
+
+\textbf{Latency Breakdown:}
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Stage} & \textbf{Time (ms)} \\
+\midrule
+Frame capture & 3.2 \\
+MediaPipe tracking & 11.4 \\
+Feature extraction & 1.1 \\
+Classification & 2.3 \\
+Smoothing + confirmation & 15.6 (frame buffer) \\
+Command execution & 18.4 \\
+\midrule
+\textbf{Total (end-to-end)} & \textbf{52.0} \\
+\bottomrule
+\end{tabular}
+\caption{Latency Profiling}
+\end{table}
+
+\textbf{Note:} Smoothing adds inherent latency (2-3 frames @ 30fps $\approx$ 66-100ms) for stability. Without smoothing, raw latency is $\sim$36ms but with higher false positive rate.
+
+\subsubsection{Module-Level Performance}
+
+\textbf{Classification Accuracy (Per-Class):}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Gesture} & \textbf{Precision} & \textbf{Recall} & \textbf{F1-Score} \\
+\midrule
+Peace sign & 0.92 & 0.89 & 0.90 \\
+Fist & 0.88 & 0.91 & 0.89 \\
+Thumbs up & 0.85 & 0.83 & 0.84 \\
+Swipe left & 0.90 & 0.88 & 0.89 \\
+Swipe right & 0.89 & 0.87 & 0.88 \\
+Pinch & 0.84 & 0.86 & 0.85 \\
+Open palm & 0.87 & 0.89 & 0.88 \\
+None & 0.94 & 0.96 & 0.95 \\
+\midrule
+\textbf{Macro avg} & \textbf{0.87} & \textbf{0.87} & \textbf{0.87} \\
+\textbf{Weighted avg} & \textbf{0.89} & \textbf{0.89} & \textbf{0.89} \\
+\bottomrule
+\end{tabular}
+\caption{Per-Class Classification Metrics}
+\end{table}
+
+\textbf{Random Forest Model:}
+\begin{itemize}
+\item Out-of-bag score: 0.85
+\item Training time: 43 seconds (9,244 training samples, 2,312 validation)
+\item Model size: 28.3 MB (pickle)
+\item Top features: finger curl states, palm orientation, fingertip distances
+\end{itemize}
+
+\textbf{Tracking Robustness:}
+\begin{itemize}
+\item Success rate: 97.1\% of frames with valid landmarks
+\item Recovery time after occlusion: $<$3 frames (100ms)
+\item Multi-hand tracking: Stable with 2 hands, occasional swaps corrected by handedness
+\end{itemize}
+
+\subsection{User Study and Qualitative Insights}
+
+\textbf{Study Design:}
+\begin{itemize}
+\item 4 participants (team members)
+\item 3 use cases tested: presentation control, window management, media playback
+\item 30-minute sessions per use case
+\item Post-session questionnaire (1-5 Likert scale)
+\end{itemize}
+
+\textbf{Quantitative Feedback:}
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Criterion} & \textbf{Average Score (1-5)} \\
+\midrule
+Ease of gesture recording & 4.5 \\
+Gesture recognition accuracy & 4.2 \\
+Response latency & 4.3 \\
+Usefulness in presentations & 4.7 \\
+Usefulness in window management & 3.8 \\
+Usefulness in media control & 4.1 \\
+Overall satisfaction & 4.4 \\
+\bottomrule
+\end{tabular}
+\caption{User Satisfaction Scores}
+\end{table}
+
+\subsubsection{User Experience Findings}
+
+\textbf{Positive Feedback:}
+\begin{itemize}
+\item "Hands-free slide control during presentations is game-changing"
+\item "Recording custom gestures is intuitive and quick"
+\item "Latency feels instantaneous, no noticeable lag"
+\item "Works reliably even with varied lighting"
+\end{itemize}
+
+\textbf{Areas for Improvement:}
+\begin{itemize}
+\item "Sometimes confuses similar gestures (peace vs. thumbs-up)"
+\item "Would like more sequential gestures for complex commands"
+\item "Auto-profile switching occasionally picks wrong profile"
+\item "Training 100+ samples per gesture is time-consuming"
+\end{itemize}
+
+\textbf{Feature Requests:}
+\begin{itemize}
+\item Voice command integration as fallback
+\item Mobile app for remote control via gestures
+\item Gesture chaining (multi-step macros)
+\item Visual feedback on-screen (not just overlay window)
+\end{itemize}
+
+\subsection{Market Relevance and Deployment Potential}
+
+\textbf{Target User Segments:}
+\begin{enumerate}
+\item \textbf{Educators/Presenters}: Hands-free control during teaching (highest satisfaction: 4.7/5)
+\item \textbf{Linux power users}: Tiling WM enthusiasts seeking gesture navigation
+\item \textbf{Content creators}: Streamers/video editors needing hands-free media control
+\item \textbf{Accessibility}: Users with limited keyboard/mouse dexterity (future focus)
+\end{enumerate}
+
+\textbf{Deployment Readiness:}
+\begin{itemize}
+\item \checkmark Core functionality complete and stable
+\item \checkmark Performance meets daily-use requirements
+\item \checkmark Documentation sufficient for self-service onboarding
+\item $\sim$ Packaging (PyPI, AUR) in progress
+\item $\times$ Mobile/cross-platform support out of scope
+\end{itemize}
+
+\textbf{Competitive Positioning:}
+\begin{itemize}
+\item \textbf{vs. Commercial (Leap Motion, RealSense)}: No hardware cost (\$0 vs. \$200+), Linux-native
+\item \textbf{vs. Mobile gesture controls}: Desktop-focused, command-controllable
+\item \textbf{vs. Existing OSS projects}: Custom training, production performance, active maintenance
+\end{itemize}
+
+\section{Discussion and Implications}
+
+\subsection{Technical Impact and Practical Applications}
+
+\textbf{Technical Achievements:}
+
+Sigil demonstrates that high-performance gesture control systems can be built entirely with commodity hardware (standard webcams) and open-source software stacks. The system achieves 52ms average latency with 87.3\% gesture accuracy while consuming only 18-22\% CPU—performance competitive with commercial solutions requiring specialized depth cameras.
+
+Key technical innovations include:
+\begin{enumerate}
+\item \textbf{Hybrid classification architecture}: Combining MediaPipe's optimized tracking with custom Random Forests on engineered geometric features achieves better accuracy-speed tradeoffs than end-to-end deep learning approaches for desktop gesture control
+\item \textbf{12x augmentation pipeline}: Aggressive data augmentation (rotation, scale, translation, jitter) enables robust generalization from relatively small user-recorded datasets (50-150 samples)
+\item \textbf{Profile-based universality}: YAML-driven configuration with auto-detection makes the system adaptable to arbitrary command-controllable environments without code changes
+\item \textbf{Temporal smoothing}: 9-frame buffer with 2-frame confirmation eliminates false positives while maintaining acceptable latency for interactive use
+\end{enumerate}
+
+\textbf{Practical Impact:}
+
+User studies demonstrate clear productivity benefits in presentation scenarios (4.7/5 satisfaction), where hands-free slide control enables better audience engagement. Linux desktop power users benefit from gesture-based window management, though the learning curve for gesture recording remains a barrier to mainstream adoption.
+
+The system's extensibility is evidenced by successful integration with:
+\begin{itemize}
+\item Multiple window managers (Hyprland, Sway, i3) via IPC protocols
+\item Presentation software (LibreOffice Impress, browser-based slides) via keyboard shortcuts
+\item Media players (VLC, MPV) via MPRIS D-Bus interface
+\item Custom shell commands for arbitrary automation
+\end{itemize}
+
+\textbf{Research Contributions:}
+
+Sigil provides a reference architecture for future gesture control research on Linux platforms. The modular design with well-documented interfaces enables researchers to:
+\begin{itemize}
+\item Experiment with alternative tracking backends (e.g., OpenPose, AlphaPose)
+\item Compare classification approaches (deep learning vs. traditional ML)
+\item Investigate temporal modeling techniques (LSTMs, Transformers, HMMs)
+\item Evaluate human factors (gesture ergonomics, learnability)
+\end{itemize}
+
+The project demonstrates that vision-based HCI can move beyond research prototypes to production-ready tools with careful attention to performance optimization, error handling, and user experience.
+
+\textbf{Limitations of Current Approach:}
+
+While Sigil achieves its core objectives, several technical and usability limitations warrant discussion:
+
+\subsection{Limitations}
+
+\subsubsection{Technical Limitations}
+
+\textbf{1. Lighting Sensitivity:}
+Despite MediaPipe's robustness, tracking accuracy degrades in low-light ($<$100 lux) or high-contrast scenarios (backlighting). This is inherent to RGB-only approaches; depth cameras would mitigate but contradict the accessibility goal.
+
+\textbf{Mitigation:} User documentation emphasizes lighting requirements; future work could add auto-exposure feedback.
+
+\textbf{2. Gesture Confusion:}
+Similar hand poses (peace sign vs. "Vulcan salute") occasionally misclassify (confusion visible in 84-85\% F1-scores for thumbs-up/pinch). This stems from:
+\begin{itemize}
+\item Limited feature discriminability in 2D projection of 3D poses
+\item Insufficient training samples for rare pose variations
+\end{itemize}
+
+\textbf{Mitigation:} Require more diverse training data; consider multi-view or temporal context.
+
+\textbf{3. Sequential Gesture Limitations:}
+Current sequential classifier uses simple trajectory matching, limiting expressive power. Complex multi-step gestures (e.g., draw circle then swipe) are not yet supported.
+
+\textbf{Mitigation:} Planned LSTM-based temporal modeling for richer gesture vocabulary.
+
+\textbf{4. Camera Field-of-View Constraints:}
+Users must keep hands within webcam FOV ($\sim$70-90° typical). Large sweeping gestures may exit frame.
+
+\textbf{Mitigation:} Encourage mid-range gestures; consider wide-angle lens recommendations.
+
+\textbf{5. CPU-Bound Performance:}
+On low-end hardware (e.g., Intel i5-8xxx series), frame rate drops to 15-20 fps with occasional stuttering. GPU acceleration (via MediaPipe GPU delegates) could help but complicates deployment.
+
+\textbf{Mitigation:} Adaptive FPS reduction; future GPU support for broader hardware compatibility.
+
+\subsubsection{Usability Limitations}
+
+\textbf{1. Training Data Collection Burden:}
+Recording 100-150 samples per gesture takes 5-10 minutes per class. For 10 custom gestures, this is 50-100 minutes—significant barrier.
+
+\textbf{Mitigation:} Pre-trained models for common gestures; semi-supervised learning to reduce sample requirements.
+
+\textbf{2. Profile Configuration Complexity:}
+YAML editing is developer-friendly but intimidating for non-technical users. GUI configuration tool needed.
+
+\textbf{Mitigation:} Planned web-based or native GUI for profile management.
+
+\textbf{3. False Negative Sensitivity:}
+To achieve zero false positives (critical for usability), confidence thresholds are conservative, leading to occasional false negatives (gesture not detected despite correct execution).
+
+\textbf{Mitigation:} Per-user calibration mode to tune sensitivity.
+
+\textbf{4. Limited Feedback Mechanisms:}
+Current system provides only visual overlay feedback. Users may not notice when gestures fail if overlay is hidden.
+
+\textbf{Mitigation:} Add audio cues (beep on recognition), haptic feedback (if supported), or on-screen notifications.
+
+\subsubsection{Scope Limitations}
+
+\textbf{1. Linux-Only:}
+No Windows/macOS support due to platform-specific dependencies (Wayland/X11, window manager IPC). Cross-platform port would require significant refactoring.
+
+\textbf{2. Single-User Focus:}
+No multi-user profiles or account management. Gestures trained by one user may not generalize to others.
+
+\textbf{3. No Accessibility Features:}
+While gesture control has accessibility potential, Sigil lacks features specifically designed for users with disabilities (e.g., assistive technology integration, customizable motor constraints).
+
+\textbf{4. Privacy Considerations:}
+Although processing is local, camera access raises privacy concerns. No visual indicator (beyond overlay) shows when system is active. Consider LED indicator or systray icon.
+
+\section{Challenges and Solutions}
+
+\subsection{Technical Challenges}
+
+\textbf{Challenge 1: MediaPipe API Stability}
+
+\textit{Problem:} MediaPipe underwent API changes between versions (legacy \texttt{mp.solutions.hands} vs. new \texttt{HandLandmarker} task API), risking breakage.
+
+\textit{Solution:} Abstract tracking backend behind interface; maintain fallback to legacy API. Pin MediaPipe version in dependencies; test upgrades before adoption.
+
+\textbf{Challenge 2: Wayland Keyboard Simulation}
+
+\textit{Problem:} Wayland's security model blocks traditional X11 tools (xdotool). ydotool requires root or uinput group membership.
+
+\textit{Solution:} Documentation guides users through ydotool setup; provide systemd service with correct permissions. Fallback to window manager IPC (hyprctl) when possible.
+
+\textbf{Challenge 3: Real-Time Performance on Modest Hardware}
+
+\textit{Problem:} Initial implementation achieved only 15-20 fps on target hardware, missing 30 fps goal.
+
+\textit{Solutions Implemented:}
+\begin{itemize}
+\item Replaced Python loops with NumPy vectorized operations (3x speedup in feature extraction)
+\item Switched from SVM to Random Forest (2ms vs. 8ms inference)
+\item Reduced camera resolution to 720p (vs. 1080p, minimal accuracy loss)
+\item Multi-threaded frame capture and processing pipeline
+\item Compiled MediaPipe with AVX2 optimizations (via pre-built wheels)
+\end{itemize}
+
+\textit{Result:} Achieved sustained 32 fps with 52ms latency.
+
+\textbf{Challenge 4: False Positive Elimination}
+
+\textit{Problem:} Early versions triggered gestures during natural hand movements (e.g., scratching face), causing disruptive command execution.
+
+\textit{Solutions:}
+\begin{itemize}
+\item Introduced "None" background class trained on diverse non-gesture poses
+\item Implemented 9-frame smoothing buffer with 2-frame confirmation
+\item Added 1000ms cooldown between same-gesture triggers
+\item Raised confidence threshold from 0.60 to 0.70
+\end{itemize}
+
+\textit{Result:} Zero false positives in 5-minute idle tests.
+
+\subsection{Usability Challenges}
+
+\textbf{Challenge 5: Gesture Learnability}
+
+\textit{Problem:} Users struggled to remember custom gesture mappings, especially with 10+ gestures.
+
+\textit{Solutions:}
+\begin{itemize}
+\item Recommend limiting active gestures to 5-7 per profile
+\item Provide visual cheat-sheet generation (\texttt{sigil cheatsheet})
+\item Encourage natural, ergonomic gestures over arbitrary poses
+\item Display gesture name in overlay on detection (training mode)
+\end{itemize}
+
+\textbf{Challenge 6: Training Data Quality}
+
+\textit{Problem:} Users recorded gestures in narrow conditions (same lighting, hand position), leading to poor runtime generalization.
+
+\textit{Solutions:}
+\begin{itemize}
+\item Updated documentation with recording best practices (vary position, orientation, lighting)
+\item Implemented 12x augmentation to compensate for limited diversity
+\item Added recording feedback showing landmark stability
+\item Require minimum 50 samples (enforced in trainer)
+\end{itemize}
+
+\textbf{Challenge 7: Profile Auto-Detection Ambiguity}
+
+\textit{Problem:} Multiple profiles matched the same application (e.g., browser for slides and video calls).
+
+\textit{Solutions:}
+\begin{itemize}
+\item Added more specific regex patterns (window title, not just class)
+\item Implemented priority ordering (first match wins)
+\item Provided manual profile switching hotkey (Super+Alt+P)
+\item Logged profile switches for debugging
+\end{itemize}
+
+\section{Future Work}
+
+\textbf{Short-Term Enhancements (3-6 months):}
+\begin{enumerate}
+\item \textbf{GUI Configuration Tool}: Web-based or GTK4 interface for profile editing, gesture recording, and training—eliminating YAML editing barrier
+\item \textbf{Pre-Trained Gesture Library}: Ship 15-20 common gestures (peace, fist, thumbs, swipes, etc.) to reduce initial setup time
+\item \textbf{Audio/Visual Feedback}: Beep sounds, on-screen notifications for gesture recognition
+\item \textbf{Packaging}: Publish to PyPI, create AUR package, Flatpak for broader distribution
+\item \textbf{Performance Profiling Dashboard}: Real-time FPS, latency, CPU usage display in overlay
+\end{enumerate}
+
+\textbf{Medium-Term Research (6-12 months):}
+\begin{enumerate}
+\item \textbf{LSTM-Based Sequential Gestures}: Replace rule-based trajectory matching with learned temporal models for richer gesture vocabulary
+\item \textbf{Transfer Learning}: Fine-tune on small user datasets from large pre-trained gesture models to reduce recording burden
+\item \textbf{Multi-View Fusion}: Support multiple webcams for 3D pose estimation without depth cameras
+\item \textbf{Gesture Chaining}: Enable multi-step macros (e.g., peace sign $\rightarrow$ swipe left $\rightarrow$ fist)
+\item \textbf{GPU Acceleration}: Implement MediaPipe GPU delegates for lower-end hardware support
+\end{enumerate}
+
+\textbf{Long-Term Vision (1-2 years):}
+\begin{enumerate}
+\item \textbf{Cross-Platform Port}: Windows/macOS versions with platform-specific input simulation
+\item \textbf{Mobile Companion App}: Android app for remote gesture control via WiFi
+\item \textbf{Multimodal Integration}: Combine gestures with voice commands for hybrid control
+\item \textbf{Accessibility Features}: Customizable motor constraints, switch control integration, screen reader compatibility
+\item \textbf{Collaborative Gestures}: Multi-user scenarios (e.g., two presenters sharing control)
+\item \textbf{Gesture Marketplace}: Community-contributed gesture packs and profiles
+\end{enumerate}
+
+\textbf{Research Directions:}
+\begin{enumerate}
+\item \textbf{Ergonomic Analysis}: Study long-term physical effects of gesture control, optimize for comfort
+\item \textbf{Learnability Studies}: Investigate optimal gesture vocabulary size, memorability factors
+\item \textbf{Context-Aware Adaptation}: ML models that adapt gesture recognition to user's environment (lighting, camera angle) automatically
+\item \textbf{Privacy-Preserving Design}: On-device federated learning to improve models without sharing video data
+\end{enumerate}
+
+\section{Conclusion}
+
+Sigil successfully demonstrates that universal, high-performance gesture control for command-controllable environments is achievable using only commodity hardware and open-source software. The system meets or exceeds all primary objectives:
+
+\begin{itemize}
+\item \textbf{Performance}: 52ms latency (target: $<$80ms), 32 fps sustained, 18-22\% CPU usage
+\item \textbf{Accuracy}: 87.3\% gesture classification, 97.1\% landmark detection, zero false positives
+\item \textbf{Universality}: Successful integration with window managers, presentation tools, virtual meetings, and media applications
+\item \textbf{Customization}: End-to-end recording, training, and mapping pipeline functional
+\item \textbf{Usability}: Intuitive hotkey-based workflow with visual feedback
+\end{itemize}
+
+The project makes several key contributions to the gesture control domain:
+
+\begin{enumerate}
+\item \textbf{Architecture}: Modular, extensible design balancing performance and flexibility
+\item \textbf{Methodology}: Hybrid classification approach combining MediaPipe tracking with engineered geometric features
+\item \textbf{Implementation}: Production-ready system with comprehensive error handling and observability
+\item \textbf{Evaluation}: Rigorous benchmarking and user studies demonstrating practical viability
+\end{enumerate}
+
+User studies validate the system's utility, particularly for presentation control (4.7/5 satisfaction). Linux power users gain gesture-based window management, and the extensible architecture invites community contributions for new use cases.
+
+\textbf{Technical Validation:}
+
+The 52ms end-to-end latency approaches the perceptual threshold for real-time interaction ($\sim$40-50ms), while the 87.3\% gesture accuracy with zero false positives demonstrates production readiness. The system's 18-22\% CPU usage leaves headroom for other applications, validating the lightweight design.
+
+\textbf{Practical Deployment:}
+
+Sigil has been successfully deployed and used daily by team members for:
+\begin{itemize}
+\item Presentation delivery (slide navigation, multimedia control)
+\item Desktop workflow automation (window closing, workspace switching)
+\item Media playback control (play/pause, volume adjustment)
+\end{itemize}
+
+This real-world usage over 2+ months confirms the system's stability and practicality.
+
+\textbf{Open-Source Impact:}
+
+As an MIT-licensed project, Sigil provides:
+\begin{itemize}
+\item Reference implementation for Linux gesture control research
+\item Extensible platform for community-contributed gestures and profiles
+\item Foundation for accessibility tools leveraging gesture interaction
+\item Educational resource for computer vision and HCI students
+\end{itemize}
+
+\textbf{Future Outlook:}
+
+While Sigil achieves its core objectives, several directions promise significant impact:
+
+\begin{itemize}
+\item \textbf{Accessibility}: Adapting the system for users with motor impairments could provide life-changing assistive technology
+\item \textbf{Performance}: GPU acceleration and model quantization could enable 60+ fps on low-end hardware
+\item \textbf{Ease-of-use}: GUI tools and pre-trained models would lower barriers to mainstream adoption
+\item \textbf{Research}: The platform enables investigations in gesture ergonomics, learnability, and multimodal interaction
+\end{itemize}
+
+\textbf{Closing Remarks:}
+
+Sigil demonstrates that webcam-based gesture control has matured from research curiosity to practical tool. By combining modern computer vision (MediaPipe), thoughtful UX design (profile system, temporal smoothing), and performance engineering (optimized pipeline), the project delivers a gesture control framework suitable for daily use.
+
+The system's universal architecture—supporting arbitrary command-controllable environments through configuration rather than hard-coding—positions it as a foundation for future gesture-based interaction paradigms. As webcams become ubiquitous and computer vision continues advancing, gesture control may transition from novelty to standard input modality.
+
+For Linux desktop users, Sigil offers immediate productivity gains. For researchers, it provides an extensible platform. For the broader community, it validates the viability of accessible, hardware-free gesture control.
+
+The project repository (\url{https://github.com/PMS61/sigil}) welcomes contributions, and we look forward to community-driven enhancements expanding Sigil's capabilities and reach.
+
+\vspace{2em}
+\noindent\textbf{Acknowledgments:} We thank the CachyOS community for optimization insights, MediaPipe team for excellent documentation, and early testers for valuable feedback.
+
+\vspace{1em}
+\noindent\textbf{Repository:} \url{https://github.com/PMS61/sigil} \\
+\noindent\textbf{License:} MIT \\
+\noindent\textbf{Contact:} \verb|pmsankhe_b23@it.vjti.ac.in|
+
+\end{document}

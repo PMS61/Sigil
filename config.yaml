@@ -30,6 +30,8 @@ tracking:
 
 execution:
   confirm_frames: 2
+  # Blanking period: After a gesture activates, no new gestures can trigger for this duration.
+  # This prevents accidental double-activations and gives users time to reset their hand position.
   blanking_ms: 1000
   confidence_threshold: 0.70
 
@@ -61,19 +63,19 @@ gestures:
     action: "hyprctl dispatch exec qs -c $qsConfig ipc call TEST_ALIVE || pkill fuzzel || fuzzel"
     cooldown_ms: 1000
 
-  - name: workspace_next
+  - name: arrow_right
     type: instant
     hand: right
     condition: { pose: "Thumb_Up" }
-    action: "hyprctl dispatch workspace r+1"
-    cooldown_ms: 400
+    action: "hyprctl dispatch exec \"ydotool key 106:1 106:0\""
+    cooldown_ms: 250
 
-  - name: workspace_prev
+  - name: arrow_left
     type: instant
     hand: right
     condition: { pose: "Thumb_Down" }
-    action: "hyprctl dispatch workspace r-1"
-    cooldown_ms: 400
+    action: "hyprctl dispatch exec \"ydotool key 105:1 105:0\""
+    cooldown_ms: 250
 
   - name: toggle_maximize
     type: instant
@@ -104,12 +106,12 @@ gestures:
     action: "hyprctl dispatch exec google-chrome-stable || hyprctl dispatch exec firefox"
     cooldown_ms: 1500
 
-  - name: launch_terminal
+  - name: left_click
     type: instant
     hand: left
     condition: { pose: "Closed_Fist" }
-    action: "hyprctl dispatch exec kitty"
-    cooldown_ms: 1500
+    action: "hyprctl dispatch exec \"ydotool click 0xC0\""
+    cooldown_ms: 300
 
   - name: media_play_pause
     type: instant
@@ -132,12 +134,12 @@ gestures:
     action: "hyprctl dispatch exec playerctl previous"
     cooldown_ms: 400
 
-  - name: toggle_help
+  - name: right_click
     type: instant
     hand: left
     condition: { pose: "Victory" }
-    action: "sigil:toggle_help"
-    cooldown_ms: 1000
+    action: "hyprctl dispatch exec \"ydotool click 0xC1\""
+    cooldown_ms: 300
 
   # ── GRADUAL: Volume Control ──────────────────────────────────────────────
   - name: volume_up
@@ -159,3 +161,21 @@ gestures:
       direction: "decrease"
     action: "hyprctl dispatch exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%-"
     cooldown_ms: 150
+
+  # ── EXTRA GESTURES (disabled by default) ────────────────────────────
+  # Additional arrow keys (up/down) for both hands - enable if needed
+  - name: arrow_up
+    type: instant
+    hand: both
+    condition: { pose: "Pointing_Up" }
+    action: "hyprctl dispatch exec \"ydotool key 103:1 103:0\""
+    cooldown_ms: 250
+    enabled: false
+
+  - name: arrow_down
+    type: instant
+    hand: both
+    condition: { pose: "Open_Palm" }
+    action: "hyprctl dispatch exec \"ydotool key 108:1 108:0\""
+    cooldown_ms: 250
+    enabled: false

@@ -303,6 +303,8 @@ class WaylandOverlay:
     # ── GTK Application ──────────────────────────────────────────────────────
     def create_window(self, app: Gtk.Application) -> Gtk.Window:
         """Build the overlay window and all widgets. Called during app activation."""
+        logger.info("create_window: cam=%dx%d, position=%s, enabled=%s",
+                     self._cam_w, self._cam_h, self._position, self._enabled)
         self._app = app
         self._window = Gtk.Window(application=app)
         self._window.set_title("Sigil")
@@ -933,7 +935,9 @@ class SigilGtkApp(Gtk.Application):
 
     def do_activate(self) -> None:
         """Create window and start frame timer if callback provided."""
+        logger.info("SigilGtkApp.do_activate called")
         self._overlay.create_window(self)
+        logger.info("SigilGtkApp: create_window returned")
 
         # Start the frame processing timer if we have a callback (legacy/sync mode)
         if self._frame_cb:

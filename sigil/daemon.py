@@ -120,11 +120,12 @@ class Daemon:
             asyncio.run(self._main_loop())
             return
 
+        logger.info("GTK path: overlay backend=%s, is_wayland=%s", self._overlay.backend, self._overlay.is_wayland)
+
         self._tracker.open()
         self._running = True
 
         logger.info("Sigil daemon starting (GTK4 thread path) …")
-        logger.info("Overlay backend: %s", self._overlay.backend)
         logger.info("Overlay enabled: %s", self._overlay.enabled)
 
         # Populate initial help content
@@ -135,6 +136,7 @@ class Daemon:
             target=self._gtk_worker_loop, name="SigilWorker", daemon=True
         )
         self._worker_thread.start()
+        logger.info("GTK path: worker thread started")
 
         app = SigilGtkApp(
             overlay=wayland_ov,
@@ -142,6 +144,7 @@ class Daemon:
             shutdown_callback=self._shutdown,
             target_fps=self._cfg.tracking.target_fps,
         )
+        logger.info("GTK path: about to call app.run()")
         app.run()
 
     def _gtk_worker_loop(self) -> None:
@@ -188,6 +191,11 @@ class Daemon:
                             result.confidence,
                         )
                         success = self._executor.execute_sync(action, result)
+                        logger.info(
+                            "execute_sync('%s') returned: %s",
+                            action,
+                            success,
+                        )
                         if success:
                             self._actions_fired += 1
                             # Schedule toast update on UI thread

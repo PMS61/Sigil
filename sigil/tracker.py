@@ -87,7 +87,7 @@ class Tracker:
         # ── Noise Filtering State ───────────────────────────────────────────
         # Exponential Moving Average (EMA) for each hand to reduce jitter
         self._smoothed_lms: dict[str, np.ndarray] = {}  # "Left", "Right"
-        self._alpha = 0.45  # Smoothing factor (0.0-1.0). Lower = more stable but laggier.
+        self._alpha = 0.7  # Smoothing factor (0.0-1.0). Higher = more responsive, lower = more stable.
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def open(self) -> None:

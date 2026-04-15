@@ -271,13 +271,13 @@ class GradualClassifier(BaseClassifier):
                 # Use history to require consistent finger count for stability
                 count_history = self._finger_count_history.get(mapping.name, [])
                 count_history.append(actual_count)
-                if len(count_history) > 5:
-                    count_history = count_history[-5:]
+                if len(count_history) > 3:
+                    count_history = count_history[-3:]
                 self._finger_count_history[mapping.name] = count_history
 
                 # Check if majority of recent frames match
                 matches = sum(1 for c in count_history if c == finger_count)
-                if matches < 3:  # require at least 3 of last 5 frames to match
+                if matches < 2:  # require at least 2 of last 3 frames to match
                     continue
 
                 # SOLIDITY FIX: If this is a continuous gesture stop immediately
@@ -447,7 +447,7 @@ class GeometricClassifier(BaseClassifier):
                 # Improved confidence: consider second-best prediction
                 sorted_probs = np.sort(probs)[::-1]
                 confidence_margin = sorted_probs[0] - sorted_probs[1] if len(sorted_probs) > 1 else sorted_probs[0]
-                adjusted_score = score * (1 + confidence_margin * 0.3)
+                adjusted_score = score * (1 + confidence_margin * 0.5)
 
                 if label == "None":
                     continue
@@ -600,9 +600,9 @@ class GestureClassifier:
     """
 
     # Minimum confidence for geometric to override builtin
-    GEOMETRIC_MIN_CONFIDENCE = 0.55
+    GEOMETRIC_MIN_CONFIDENCE = 0.45
     # Buffer size for smoothing
-    SMOOTHING_BUFFER_SIZE = 9
+    SMOOTHING_BUFFER_SIZE = 5
 
     def __init__(
         self,
